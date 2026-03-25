@@ -1,9 +1,9 @@
 {
-  "name": "@ab-testing/js",
-  "version": "1.0.3",
-  "description": "A/B Testing client-side JavaScript SDK",
-  "main": "dist/ab-testing.umd.js",
-  "module": "dist/ab-testing.esm.js",
+  "name": "@growthroadmaps/js",
+  "version": "2.0.0",
+  "description": "GrowthRoadmaps client-side JavaScript SDK — A/B testing, heatmaps, and surveys",
+  "main": "dist/growth.umd.js",
+  "module": "dist/growth.esm.js",
   "types": "dist/index.d.ts",
   "files": [
     "dist"

@@ -2,9 +2,9 @@
   var W = window as any;
   var D = document;
 
-  var cfg = W.__ab_loader_cfg;
+  var cfg = W.__gr_loader_cfg;
   if (!cfg || !cfg.pk) return;
-  W.__ab_loader_ran = true;
+  W.__gr_loader_ran = true;
   var pk = cfg.pk as string;
   var host = cfg.host as string;
 
@@ -95,7 +95,7 @@
   } catch(e) {}
 
   var sc = D.createElement('script');
-  sc.src = 'https://js.growthroadmaps.com/ab-testing.min.js';
+  sc.src = 'https://js.growthroadmaps.com/growth.min.js';
   sc.async = true;
   D.head.appendChild(sc);
 })();

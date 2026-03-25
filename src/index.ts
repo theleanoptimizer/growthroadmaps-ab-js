@@ -1,5 +1,5 @@
 import {
-  ABTestingConfig,
+  GrowthConfig,
   ExperimentConfig,
   ProjectInfo,
   TrackOptions,
@@ -14,6 +14,14 @@ import { getCachedConfig, setCachedConfig, isCacheFresh } from './storage';
 import { EventBatcher } from './batcher';
 import { getAntiFlickerSnippet, revealPage } from './anti-flicker';
 import type { HeatmapTracker } from './heatmap';
+import type { SurveyManager } from './survey';
+
+interface LazyModule<T> {
+  __lazyLoad?: () => Promise<T>;
+}
+
+type HeatmapModule = { HeatmapTracker: typeof HeatmapTracker };
+type SurveyModule = { SurveyManager: typeof SurveyManager };
 
 const W = typeof window !== 'undefined' ? window : undefined;
 const D = typeof document !== 'undefined' ? document : undefined;
@@ -61,7 +69,7 @@ function saveAssignments(pk: string, assignments: Map<string, Variant>, experime
 }
 
 export { getAntiFlickerSnippet } from './anti-flicker';
-export type { ABTestingConfig, ExperimentConfig, Variant, TrackOptions } from './types';
+export type { GrowthConfig, ExperimentConfig, Variant, TrackOptions } from './types';
 
 function urlMatch(url: string, type: string, val: string): boolean {
   switch (type) {
@@ -144,7 +152,7 @@ function addCss(v: Variant, eid: string, m: Map<string, HTMLStyleElement>): void
 
 function runJs(v: Variant): void {
   if (!v.js) return;
-  try { new Function(v.js)(); } catch (e) { console.error('[AB] JS error ' + v.name + ':', e); }
+  try { new Function(v.js)(); } catch (e) { console.error('[GR] JS error ' + v.name + ':', e); }
 }
 
 function goalKey(g: Goal): string { return g.goal_type + (g.value ? ':' + g.value : ''); }
@@ -157,8 +165,8 @@ function mkConv(eid: string, vid: string, uid: string, sid: string | undefined, 
   return { type: 'conversion', experiment_id: eid, variant_id: vid, user_id: uid, session_id: sid, goal_name: gn, goal_value: gv, metadata: md, timestamp: new Date().toISOString() } as ABEvent;
 }
 
-export class ABTesting {
-  #c: ABTestingConfig;
+export class GrowthRoadmaps {
+  #c: GrowthConfig;
   #e: ExperimentConfig[] = [];
   #p: ProjectInfo | null = null;
   #b: EventBatcher;
@@ -176,33 +184,36 @@ export class ABTesting {
   #consentRequired: boolean;
   #pendingEvents: ABEvent[] = [];
   #ht: HeatmapTracker | null = null;
+  #hc: Array<{ url_rules: Array<{ match_type: string; value: string }> }> = [];
+  #sv: SurveyManager | null = null;
 
-  constructor(c: ABTestingConfig) {
-    if (c.clientKey && !c.projectKey) c.projectKey = c.clientKey;
+  constructor(c: GrowthConfig) {
     this.#consentRequired = c.cookieConsent === 'required';
     this.#consent = !this.#consentRequired;
     if (!c.userId && !c.sessionId && D) c.userId = vid(this.#consentRequired);
-    if (W && W.__ab_loader_ran && W.__ab_loader_cfg) {
-      if (!c.projectKey && !c.clientKey) c.projectKey = W.__ab_loader_cfg.pk;
-      if (!c.apiHost && W.__ab_loader_cfg.host) c.apiHost = W.__ab_loader_cfg.host;
+    if (W && W.__gr_loader_ran) {
+      const cfg = W.__gr_loader_cfg;
+      if (cfg) {
+        if (!c.projectKey) c.projectKey = cfg.pk;
+        if (!c.apiHost && cfg.host) c.apiHost = cfg.host;
+      }
     }
     this.#c = c;
-    this.#b = new EventBatcher(c.apiHost, c.projectKey || c.clientKey || '');
-    if (c.heatmaps && D) {
-      this.#initHeatmap();
-    }
+    this.#b = new EventBatcher(c.apiHost, c.projectKey || '');
   }
 
-  async #initHeatmap(): Promise<void> {
-    const { HeatmapTracker } = await import('./heatmap');
-    this.#ht = new HeatmapTracker(this.#b, this.#c.userId || this.#c.sessionId || '', this.#c.sessionId, () => this.#consent);
+  async #initHeatmap(urlRuleSets: Array<Array<{ match_type: string; value: string }>>): Promise<void> {
+    if (!D || urlRuleSets.length === 0) return;
+    const mod = await import('./heatmap') as HeatmapModule & LazyModule<HeatmapModule>;
+    const resolved = typeof mod.__lazyLoad === 'function' ? await mod.__lazyLoad() : mod;
+    this.#ht = new resolved.HeatmapTracker(this.#b, this.#c.userId || this.#c.sessionId || '', this.#c.sessionId, () => this.#consent, urlRuleSets);
   }
 
-  #pk(): string { return this.#c.projectKey || this.#c.clientKey || ''; }
+  #pk(): string { return this.#c.projectKey || ''; }
   #uid(): string | undefined { return this.#c.userId || this.#c.sessionId; }
 
   #adoptLoaderStyles(): void {
-    if (!D || !W?.__ab_loader_ran) return;
+    if (!D || !W?.__gr_loader_ran) return;
     const tags = D.querySelectorAll('style[data-ab-css]');
     tags.forEach(tag => {
       const vid = tag.getAttribute('data-ab-css');
@@ -237,7 +248,7 @@ export class ABTesting {
               this.#pv = true;
               const fv = { id: d.variant_id, name: d.variant_name, weight: 100, css: d.css, js: d.js } as Variant;
               if (d.mode === 'client') { addCss(fv, '', this.#sm); runJs(fv); }
-              console.info('[AB] Preview: ' + d.variant_name + ' (' + d.experiment_name + ')');
+              console.info('[GR] Preview: ' + d.variant_name + ' (' + d.experiment_name + ')');
               return;
             }
           } catch {}
@@ -245,20 +256,27 @@ export class ABTesting {
       }
       const pk = this.#pk();
       const cc = getCachedConfig(pk);
-      if (cc && isCacheFresh(cc)) { this.#e = cc.experiments; this.#p = cc.project || null; return; }
+      if (cc && isCacheFresh(cc)) { this.#e = cc.experiments; this.#p = cc.project || null; this.#hc = cc.heatmapConfigs || []; return; }
       try {
         const r = await fetch(this.#c.apiHost + '/api/ab/experiments/all-configs?pk=' + encodeURIComponent(pk));
         if (!r.ok) throw 0;
         const d = await r.json();
         if (d.experiments && d.project) { this.#p = d.project; this.#e = Object.values(d.experiments) as ExperimentConfig[]; }
         else this.#e = Array.isArray(d) ? d : Object.values(d);
-        setCachedConfig(pk, { experiments: this.#e, project: this.#p || undefined, timestamp: Date.now() });
-      } catch { this.#e = cc ? cc.experiments : []; this.#p = cc?.project || null; }
+        if (d.heatmapConfigs) this.#hc = d.heatmapConfigs;
+        setCachedConfig(pk, { experiments: this.#e, project: this.#p || undefined, heatmapConfigs: this.#hc, timestamp: Date.now() });
+      } catch { this.#e = cc ? cc.experiments : []; this.#p = cc?.project || null; this.#hc = cc?.heatmapConfigs || []; }
     } catch { this.#e = []; } finally {
       this.#adoptLoaderStyles();
       revealPage();
       if (this.#consent) this.#b.start();
       if (!this.#pv) { this.#goals(); this.#route(); }
+      if (this.#c.heatmaps && this.#hc.length > 0) {
+        this.#initHeatmap(this.#hc.map(c => c.url_rules || []));
+      }
+      if (this.#c.surveys) {
+        this.#initSurveys();
+      }
     }
   }
 
@@ -404,6 +422,7 @@ export class ABTesting {
     if (this.#ht) this.#ht.pageChanged();
     this.#allUrlGoals();
     this.#reeval();
+    if (this.#sv) this.#sv.onRouteChange();
   }
 
   #route(): void {
@@ -418,6 +437,43 @@ export class ABTesting {
 
   pageChanged(): void { this.#lu = ''; this.#onNav(); }
 
+  async #initSurveys(): Promise<void> {
+    const sc = this.#c.surveys;
+    const teamId = (typeof sc === 'object' && sc.teamId) ? sc.teamId : this.#pk();
+    if (!teamId) return;
+    try {
+      const mod = await import('./survey') as SurveyModule & LazyModule<SurveyModule>;
+      const resolved = typeof mod.__lazyLoad === 'function' ? await mod.__lazyLoad() : mod;
+      this.#sv = new resolved.SurveyManager(this.#c.apiHost, teamId, this.#c.userId);
+      const load = () => this.#sv!.load();
+      if (D && D.readyState === 'complete') {
+        if (typeof requestIdleCallback === 'function') requestIdleCallback(load);
+        else setTimeout(load, 0);
+      } else if (W) {
+        W.addEventListener('load', () => {
+          if (typeof requestIdleCallback === 'function') requestIdleCallback(load);
+          else setTimeout(load, 0);
+        });
+      }
+    } catch {}
+  }
+
+  surveyTrack(actionName: string): void {
+    if (this.#sv) this.#sv.trackAction(actionName);
+  }
+
+  setUserId(id: string): void {
+    if (this.#sv) this.#sv.setUserId(id);
+  }
+
+  setAttribute(key: string, value: string): void {
+    if (this.#sv) this.#sv.setAttribute(key, value);
+  }
+
+  setEmail(email: string): void {
+    if (this.#sv) this.#sv.setEmail(email);
+  }
+
   destroy(): void {
     if (this.#ht) { this.#ht.destroy(); this.#ht = null; }
     this.#b.destroy();
@@ -428,7 +484,7 @@ export class ABTesting {
 }
 
 if (W) {
-  W.ABTesting = ABTesting;
+  W.GrowthRoadmaps = GrowthRoadmaps;
   W.getAntiFlickerSnippet = getAntiFlickerSnippet;
-  try { W.dispatchEvent(new CustomEvent('ab:ready')); } catch {}
+  try { W.dispatchEvent(new CustomEvent('gr:ready')); } catch {}
 }

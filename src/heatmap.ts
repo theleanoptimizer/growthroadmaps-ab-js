@@ -1,10 +1,16 @@
 import { EventBatcher } from './batcher';
-import { HeatmapClickEvent, HeatmapScrollEvent } from './types';
+import { HeatmapClickEvent, HeatmapScrollEvent, HeatmapUrlRule } from './types';
 
 interface ClickRecord {
   x: number;
   y: number;
   t: number;
+}
+
+interface CompiledUrlRule {
+  match_type: string;
+  value: string;
+  regex?: RegExp;
 }
 
 const INTERACTIVE_TAGS = new Set(['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'SUMMARY', 'DETAILS']);
@@ -41,6 +47,18 @@ function deviceType(): string {
   return 'desktop';
 }
 
+function urlMatch(url: string, type: string, val: string, compiledRegex?: RegExp): boolean {
+  switch (type) {
+    case 'exact': case 'equals': return url === val;
+    case 'contains': return url.includes(val);
+    case 'starts_with': return url.startsWith(val);
+    case 'regex':
+      if (compiledRegex) return compiledRegex.test(url);
+      try { return new RegExp(val).test(url); } catch { return false; }
+    default: return url.includes(val);
+  }
+}
+
 export class HeatmapTracker {
   #batcher: EventBatcher;
   #userId: string;
@@ -52,21 +70,49 @@ export class HeatmapTracker {
   #variantId?: string;
   #consent: () => boolean;
   #currentPageUrl: string;
+  #compiledRuleSets: CompiledUrlRule[][];
+  #tracking = false;
 
   constructor(
     batcher: EventBatcher,
     userId: string,
     sessionId: string | undefined,
-    consentCheck: () => boolean
+    consentCheck: () => boolean,
+    urlRuleSets: Array<Array<HeatmapUrlRule>>
   ) {
     this.#batcher = batcher;
     this.#userId = userId;
     this.#sessionId = sessionId;
     this.#consent = consentCheck;
     this.#currentPageUrl = window.location.href;
+
+    this.#compiledRuleSets = urlRuleSets.map(ruleSet =>
+      ruleSet.map(rule => {
+        const compiled: CompiledUrlRule = { match_type: rule.match_type, value: rule.value };
+        if (rule.match_type === 'regex') {
+          try { compiled.regex = new RegExp(rule.value); } catch {}
+        }
+        return compiled;
+      })
+    );
+
+    if (this.#compiledRuleSets.length === 0) return;
+
+    this.#tracking = this.#shouldTrack();
     this.#attachClickListener();
     this.#attachScrollListener();
     this.#attachUnloadListener();
+  }
+
+  #shouldTrack(): boolean {
+    if (this.#compiledRuleSets.length === 0) return false;
+    const url = this.#currentPageUrl;
+    for (const ruleSet of this.#compiledRuleSets) {
+      for (const rule of ruleSet) {
+        if (urlMatch(url, rule.match_type, rule.value, rule.regex)) return true;
+      }
+    }
+    return false;
   }
 
   setVariantId(vid: string): void {
@@ -80,6 +126,8 @@ export class HeatmapTracker {
 
   #attachClickListener(): void {
     const handler = (e: MouseEvent) => {
+      if (!this.#tracking) return;
+
       const target = e.target;
       if (!(target instanceof Element)) return;
 
@@ -142,6 +190,7 @@ export class HeatmapTracker {
     let lastUpdate = 0;
 
     const update = () => {
+      if (!this.#tracking) return;
       const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
       const viewportHeight = window.innerHeight;
       const pageHeight = Math.max(
@@ -157,6 +206,7 @@ export class HeatmapTracker {
     };
 
     const handler = () => {
+      if (!this.#tracking) return;
       const now = Date.now();
       if (now - lastUpdate < SCROLL_THROTTLE) {
         if (!ticking) {
@@ -175,7 +225,7 @@ export class HeatmapTracker {
   }
 
   #sendScrollEvent(): void {
-    if (this.#scrollSent || this.#maxScroll <= 0) return;
+    if (!this.#tracking || this.#scrollSent || this.#maxScroll <= 0) return;
     this.#scrollSent = true;
 
     const pageHeight = Math.max(
@@ -221,6 +271,7 @@ export class HeatmapTracker {
     this.#maxScroll = 0;
     this.#scrollSent = false;
     this.#ringBuffer = [];
+    this.#tracking = this.#shouldTrack();
   }
 
   destroy(): void {

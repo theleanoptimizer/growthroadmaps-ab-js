@@ -1,6 +1,6 @@
-# @growthroadmaps/ab-client
+# @growthroadmaps/growth-client
 
-A standalone, zero-dependency client-side JavaScript SDK for running A/B tests. The SDK fetches experiment configurations from the platform API, deterministically assigns users to variants, batches exposure and conversion events, and supports an anti-flicker mode to prevent visible page reflows.
+A standalone, zero-dependency client-side JavaScript SDK for Growth Roadmaps. The unified SDK consolidates A/B testing, heatmaps, and surveys into a single script. It fetches experiment configurations from the platform API, deterministically assigns users to variants, batches exposure and conversion events, supports an anti-flicker mode, collects heatmap data, and displays surveys — all from one lightweight bundle.
 
 ## Installation
 
@@ -11,20 +11,20 @@ Include the SDK via a script tag or install as an ES module.
 ### Standard Script Tag (no anti-flicker)
 
 ```html
-<script src="https://js.growthroadmaps.com/ab-testing.min.js" async></script>
+<script src="https://js.growthroadmaps.com/growth.min.js" async></script>
 <script>
-  window.addEventListener('ab:ready', async function() {
-    const ab = new ABTesting({
+  window.addEventListener('gr:ready', async function() {
+    window.gr = new GrowthRoadmaps({
       projectKey: 'proj_xxx',
       apiHost: 'https://growthroadmaps.com',
       userId: 'user_123'
     })
-    await ab.init()
-    const variant = ab.getVariant('hero-cta', 'control')
+    await window.gr.init()
+    var variant = window.gr.getVariant('hero-cta', 'control')
     if (variant === 'variant_b') {
       document.getElementById('cta').textContent = 'Start free trial'
     }
-    ab.track('signup')
+    window.gr.track('signup')
   })
 </script>
 ```
@@ -42,23 +42,40 @@ Include the SDK via a script tag or install as an ES module.
 </script>
 
 <!-- Step 2: load the SDK async as normal -->
-<script src="https://js.growthroadmaps.com/ab-testing.min.js" async></script>
+<script src="https://js.growthroadmaps.com/growth.min.js" async></script>
 
 <!-- Step 3: init with antiFlicker: true — SDK reveals page automatically -->
 <script>
-  window.addEventListener('ab:ready', async function() {
-    const ab = new ABTesting({
+  window.addEventListener('gr:ready', async function() {
+    window.gr = new GrowthRoadmaps({
       projectKey: 'proj_xxx',
       apiHost: 'https://growthroadmaps.com',
       userId: 'user_123',
       antiFlicker: true
     })
-    await ab.init()  // page becomes visible here
-    const variant = ab.getVariant('hero-cta', 'control')
+    await window.gr.init()  // page becomes visible here
+    var variant = window.gr.getVariant('hero-cta', 'control')
     if (variant === 'variant_b') {
       document.getElementById('cta').textContent = 'Start free trial'
     }
-    ab.track('signup')
+    window.gr.track('signup')
+  })
+</script>
+```
+
+### With Heatmaps & Surveys
+
+```html
+<script src="https://js.growthroadmaps.com/growth.min.js" async></script>
+<script>
+  window.addEventListener('gr:ready', async function() {
+    window.gr = new GrowthRoadmaps({
+      projectKey: 'proj_xxx',
+      apiHost: 'https://growthroadmaps.com',
+      heatmaps: true,
+      surveys: true
+    })
+    await window.gr.init()
   })
 </script>
 ```
@@ -66,13 +83,13 @@ Include the SDK via a script tag or install as an ES module.
 ### ES Module
 
 ```javascript
-import { ABTesting } from '@growthroadmaps/ab-client'
+import { GrowthRoadmaps } from '@growthroadmaps/growth-client'
 // identical API, antiFlicker option works the same way
 ```
 
 ## API Reference
 
-### `new ABTesting(config)`
+### `new GrowthRoadmaps(config)`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -81,10 +98,13 @@ import { ABTesting } from '@growthroadmaps/ab-client'
 | `userId` | `string` | No | The current user's ID |
 | `sessionId` | `string` | No | The current session ID |
 | `antiFlicker` | `boolean` | No | Enable anti-flicker mode (default: `false`) |
+| `heatmaps` | `boolean` | No | Enable heatmap tracking (default: `false`) |
+| `surveys` | `boolean \| { teamId }` | No | Enable surveys (default: `false`) |
+| `cookieConsent` | `'required'` | No | Require consent before setting cookies |
 
 ### `init(): Promise<void>`
 
-Fetches experiment configurations from the API. Caches in memory and localStorage with a 60-second TTL. On failure, falls back to cached config or empty config. Never throws.
+Fetches experiment configurations from the API. Caches in memory and localStorage with a 60-second TTL. On failure, falls back to cached config or empty config. Never throws. If surveys are enabled, loads survey configs and sets up triggers.
 
 ### `getVariant(experimentName: string, fallback: string): string`
 
@@ -98,6 +118,26 @@ Queues a conversion event for all experiments the user has been exposed to in th
 
 Queues a conversion event for a specific experiment only.
 
+### `surveyTrack(actionName: string): void`
+
+Triggers surveys that are configured with a `code` trigger matching the given action name.
+
+### `setUserId(id: string): void`
+
+Sets the user ID for survey targeting and response attribution.
+
+### `setAttribute(key: string, value: string): void`
+
+Sets a user attribute for survey targeting rules.
+
+### `setEmail(email: string): void`
+
+Convenience method to set the email attribute.
+
+### `pageChanged(): void`
+
+Manually notify the SDK of a route change (only needed for hash-based or non-standard routing).
+
 ### `getAntiFlickerSnippet(maxHideMs?: number): string`
 
 Returns the inline anti-flicker script string with the specified timeout (default: 3000ms).
@@ -108,6 +148,11 @@ Returns the inline anti-flicker script string with the specified timeout (defaul
 - Uses `navigator.sendBeacon` on page unload to ensure no events are lost
 - Retries once on failure before discarding
 
+## Lazy Loading
+
+- **Heatmaps**: The heatmap tracking module is only loaded when `heatmaps: true` is set and heatmap configurations exist
+- **Survey Widget**: The survey rendering module (Shadow DOM, styles, question types) is only loaded when a survey is about to display — the lightweight trigger/targeting logic is bundled in the core
+
 ## Build
 
 ```bash
@@ -115,7 +160,11 @@ npm run build
 ```
 
 Outputs:
-- `dist/ab-testing.esm.js` — ES module
-- `dist/ab-testing.umd.js` — UMD
-- `dist/ab-testing.min.js` — Minified UMD (~11 KB, ~4.2 KB gzipped)
+- `dist/growth.esm.js` — ES module
+- `dist/growth.umd.js` — UMD
+- `dist/growth.min.js` — Minified UMD (core A/B engine)
+- `dist/heatmap.min.js` — Heatmap tracker (lazy loaded)
+- `dist/survey.min.js` — Survey manager (lazy loaded)
+- `dist/survey-widget.min.js` — Survey widget renderer (lazy loaded)
+- `dist/growth-loader.min.js` — Anti-flicker loader
 - `dist/index.d.ts` — TypeScript declarations
