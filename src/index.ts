@@ -13,6 +13,7 @@ import { assignVariant, fnv1a } from './hasher';
 import { getCachedConfig, setCachedConfig, isCacheFresh } from './storage';
 import { EventBatcher } from './batcher';
 import { getAntiFlickerSnippet, revealPage } from './anti-flicker';
+import type { HeatmapTracker } from './heatmap';
 
 const W = typeof window !== 'undefined' ? window : undefined;
 const D = typeof document !== 'undefined' ? document : undefined;
@@ -174,6 +175,7 @@ export class ABTesting {
   #consent: boolean;
   #consentRequired: boolean;
   #pendingEvents: ABEvent[] = [];
+  #ht: HeatmapTracker | null = null;
 
   constructor(c: ABTestingConfig) {
     if (c.clientKey && !c.projectKey) c.projectKey = c.clientKey;
@@ -186,6 +188,14 @@ export class ABTesting {
     }
     this.#c = c;
     this.#b = new EventBatcher(c.apiHost, c.projectKey || c.clientKey || '');
+    if (c.heatmaps && D) {
+      this.#initHeatmap();
+    }
+  }
+
+  async #initHeatmap(): Promise<void> {
+    const { HeatmapTracker } = await import('./heatmap');
+    this.#ht = new HeatmapTracker(this.#b, this.#c.userId || this.#c.sessionId || '', this.#c.sessionId, () => this.#consent);
   }
 
   #pk(): string { return this.#c.projectKey || this.#c.clientKey || ''; }
@@ -330,6 +340,7 @@ export class ABTesting {
     if (e.ga && !this.#gf.has(e.id)) {
       try { if (W?.gtag) { W.gtag('event', 'ab_assignment', { send_to: e.ga.measurement_id, [e.ga.dimension_name]: v.name, experiment_id: e.id, experiment_name: e.name }); this.#gf.add(e.id); } } catch {}
     }
+    if (this.#ht) this.#ht.setVariantId(v.id);
     if (e.mode === 'client' && !this.#ran.has(v.id)) { this.#ran.add(v.id); addCss(v, e.id, this.#sm); runJs(v); }
     saveAssignments(this.#pk(), this.#a, this.#e);
     return v.name;
@@ -390,6 +401,7 @@ export class ABTesting {
     const u = W!.location.href;
     if (u === this.#lu) return;
     this.#lu = u;
+    if (this.#ht) this.#ht.pageChanged();
     this.#allUrlGoals();
     this.#reeval();
   }
@@ -407,6 +419,7 @@ export class ABTesting {
   pageChanged(): void { this.#lu = ''; this.#onNav(); }
 
   destroy(): void {
+    if (this.#ht) { this.#ht.destroy(); this.#ht = null; }
     this.#b.destroy();
     for (const c of this.#cl) c();
     this.#cl = [];

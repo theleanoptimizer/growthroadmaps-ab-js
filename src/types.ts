@@ -68,7 +68,27 @@ export interface ConversionEvent {
   timestamp: string;
 }
 
-export type ABEvent = ExposureEvent | ConversionEvent;
+export type ABEvent = ExposureEvent | ConversionEvent | HeatmapClickEvent | HeatmapScrollEvent;
+
+export interface HeatmapClickEvent {
+  type: 'heatmap_click';
+  experiment_id?: string;
+  variant_id?: string;
+  user_id: string;
+  session_id?: string;
+  timestamp: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface HeatmapScrollEvent {
+  type: 'heatmap_scroll';
+  experiment_id?: string;
+  variant_id?: string;
+  user_id: string;
+  session_id?: string;
+  timestamp: string;
+  metadata?: Record<string, unknown>;
+}
 
 export interface ABTestingConfig {
   projectKey?: string;
@@ -80,6 +100,7 @@ export interface ABTestingConfig {
   antiFlicker?: boolean;
   customAttributes?: Record<string, string>;
   cookieConsent?: 'required';
+  heatmaps?: boolean;
 }
 
 export interface ProjectInfo {
