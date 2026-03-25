@@ -27,35 +27,46 @@ return ${globalName};
   },
 };
 
+const sharedOptions = {
+  entryPoints: ["src/index.ts"],
+  bundle: true,
+  platform: "browser",
+  target: "es2022",
+  treeShaking: true,
+};
+
 async function build() {
   await esbuild.build({
-    entryPoints: ["src/index.ts"],
-    bundle: true,
+    ...sharedOptions,
     format: "esm",
-    target: "es2017",
     outfile: "dist/ab-testing.esm.js",
   });
 
   await esbuild.build({
-    entryPoints: ["src/index.ts"],
-    bundle: true,
+    ...sharedOptions,
     format: "iife",
     globalName: "ABTestingSDK",
-    target: "es2017",
     outfile: "dist/ab-testing.umd.js",
     plugins: [umdWrapper],
   });
 
-  await esbuild.build({
-    entryPoints: ["src/index.ts"],
-    bundle: true,
+  const minResult = await esbuild.build({
+    ...sharedOptions,
     format: "iife",
     globalName: "ABTestingSDK",
-    target: "es2017",
     minify: true,
+    minifyWhitespace: true,
+    minifyIdentifiers: true,
+    minifySyntax: true,
+    legalComments: "none",
+    drop: ["debugger"],
     outfile: "dist/ab-testing.min.js",
     plugins: [umdWrapper],
+    metafile: true,
   });
+
+  console.log("\n--- Bundle Analysis ---");
+  console.log(await esbuild.analyzeMetafile(minResult.metafile));
 
   execSync("npx tsc --emitDeclarationOnly", { stdio: "inherit" });
 

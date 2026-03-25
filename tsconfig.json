@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "target": "ES2017",
+    "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "node",
     "declaration": true,
@@ -10,7 +10,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "lib": ["ES2017", "DOM"],
+    "lib": ["ES2022", "DOM"],
     "typeRoots": []
   },
   "include": ["src"]

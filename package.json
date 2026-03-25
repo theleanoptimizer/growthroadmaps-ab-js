@@ -1,6 +1,6 @@
 {
   "name": "@ab-testing/js",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A/B Testing client-side JavaScript SDK",
   "main": "dist/ab-testing.umd.js",
   "module": "dist/ab-testing.esm.js",

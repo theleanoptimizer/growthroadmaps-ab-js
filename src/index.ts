@@ -1,793 +1,339 @@
 import {
   ABTestingConfig,
   ExperimentConfig,
-  CachedConfig,
   ProjectInfo,
   TrackOptions,
   Variant,
   UrlRule,
   Goal,
   TargetingRule,
+  ABEvent,
 } from './types';
 import { assignVariant, fnv1a } from './hasher';
 import { getCachedConfig, setCachedConfig, isCacheFresh } from './storage';
 import { EventBatcher } from './batcher';
 import { getAntiFlickerSnippet, revealPage } from './anti-flicker';
 
-const AB_VID_COOKIE = '_ab_vid';
+const W = typeof window !== 'undefined' ? window : undefined;
+const D = typeof document !== 'undefined' ? document : undefined;
+const N = typeof navigator !== 'undefined' ? navigator : undefined;
 
-function generateUUID(): string {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return crypto.randomUUID();
-  }
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+function uuid(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
     const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
   });
 }
 
-function getCookie(name: string): string | null {
-  if (typeof document === 'undefined') return null;
-  const match = document.cookie.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]*)'));
-  return match ? decodeURIComponent(match[1]) : null;
+function gc(n: string): string | null {
+  if (!D) return null;
+  const m = D.cookie.match(new RegExp('(?:^|;\\s*)' + n + '=([^;]*)'));
+  return m ? decodeURIComponent(m[1]) : null;
 }
 
-function setCookie(name: string, value: string, maxAgeDays: number): void {
-  if (typeof document === 'undefined') return;
-  const maxAge = maxAgeDays * 24 * 60 * 60;
-  document.cookie = `${name}=${encodeURIComponent(value)};path=/;max-age=${maxAge};SameSite=Lax`;
-}
-
-function getOrCreateVisitorId(): string {
-  const existing = getCookie(AB_VID_COOKIE);
-  if (existing) return existing;
-  const id = generateUUID();
-  setCookie(AB_VID_COOKIE, id, 365);
+function vid(): string {
+  const v = gc('_ab_vid');
+  if (v) return v;
+  const id = uuid();
+  if (D) D.cookie = `_ab_vid=${encodeURIComponent(id)};path=/;max-age=31536000;SameSite=Lax`;
   return id;
 }
 
 export { getAntiFlickerSnippet } from './anti-flicker';
 export type { ABTestingConfig, ExperimentConfig, Variant, TrackOptions } from './types';
 
-function matchesUrl(url: string, rule: UrlRule): boolean {
-  switch (rule.match_type) {
-    case 'exact':
-    case 'equals':
-      return url === rule.value;
-    case 'contains':
-      return url.includes(rule.value);
-    case 'starts_with':
-      return url.startsWith(rule.value);
-    case 'regex':
-      try {
-        return new RegExp(rule.value).test(url);
-      } catch {
-        return false;
-      }
-    default:
-      return false;
+function urlMatch(url: string, type: string, val: string): boolean {
+  switch (type) {
+    case 'exact': case 'equals': return url === val;
+    case 'contains': return url.includes(val);
+    case 'starts_with': return url.startsWith(val);
+    case 'regex': try { return new RegExp(val).test(url); } catch { return false; }
+    default: return url.includes(val);
   }
 }
 
-function getDeviceType(): string {
-  if (typeof navigator === 'undefined') return 'desktop';
-  const ua = navigator.userAgent;
-  if (/Tablet|iPad/i.test(ua)) return 'tablet';
-  if (/Mobi|Android/i.test(ua)) return 'mobile';
-  return 'desktop';
+function passesRules(rules: UrlRule[] | undefined): boolean {
+  if (!rules?.length || !W) return true;
+  const url = W.location.href;
+  for (const r of rules) if (r.action === 'exclude' && urlMatch(url, r.match_type, r.value)) return false;
+  const inc = rules.filter(r => r.action !== 'exclude');
+  return !inc.length || inc.some(r => urlMatch(url, r.match_type, r.value));
 }
 
-function getQueryParam(key: string): string | null {
-  if (typeof window === 'undefined') return null;
-  const params = new URLSearchParams(window.location.search);
-  return params.get(key);
+function devType(): string {
+  if (!N) return 'desktop';
+  const u = N.userAgent;
+  return /Tablet|iPad/i.test(u) ? 'tablet' : /Mobi|Android/i.test(u) ? 'mobile' : 'desktop';
 }
 
-function getCookieValue(name: string): string | null {
-  if (typeof document === 'undefined') return null;
-  const match = document.cookie
-    .split('; ')
-    .find((row) => row.startsWith(name + '='));
-  return match ? match.split('=').slice(1).join('=') : null;
-}
-
-function getBrowserName(): string {
-  if (typeof navigator === 'undefined') return '';
-  const ua = navigator.userAgent;
-  if (/Edg\//i.test(ua)) return 'Edge';
-  if (/Chrome/i.test(ua)) return 'Chrome';
-  if (/Firefox/i.test(ua)) return 'Firefox';
-  if (/Safari/i.test(ua)) return 'Safari';
-  if (/Opera|OPR/i.test(ua)) return 'Opera';
+function uam(pats: [RegExp, string][]): string {
+  if (!N) return '';
+  for (const [r, n] of pats) if (r.test(N.userAgent)) return n;
   return '';
 }
 
-function getOSName(): string {
-  if (typeof navigator === 'undefined') return '';
-  const ua = navigator.userAgent;
-  if (/Windows/i.test(ua)) return 'Windows';
-  if (/Mac OS/i.test(ua)) return 'macOS';
-  if (/Linux/i.test(ua)) return 'Linux';
-  if (/Android/i.test(ua)) return 'Android';
-  if (/iOS|iPhone|iPad/i.test(ua)) return 'iOS';
-  return '';
-}
+const BR: [RegExp, string][] = [[/Edg\//i, 'Edge'], [/Chrome/i, 'Chrome'], [/Firefox/i, 'Firefox'], [/Safari/i, 'Safari'], [/Opera|OPR/i, 'Opera']];
+const OL: [RegExp, string][] = [[/Windows/i, 'Windows'], [/Mac OS/i, 'macOS'], [/Android/i, 'Android'], [/iOS|iPhone|iPad/i, 'iOS'], [/Linux/i, 'Linux']];
 
-function getLanguage(): string {
-  if (typeof navigator === 'undefined') return '';
-  return navigator.language || '';
-}
-
-function evaluateTargetingRule(
-  rule: TargetingRule,
-  _clientKey: string,
-  customAttributes?: Record<string, string>
-): boolean {
-  let attrValue: string | null | undefined;
-
-  switch (rule.attribute) {
-    case 'device':
-      attrValue = getDeviceType();
-      break;
-    case 'browser':
-      attrValue = getBrowserName();
-      break;
-    case 'os':
-      attrValue = getOSName();
-      break;
-    case 'language':
-      attrValue = getLanguage();
-      break;
-    case 'country':
-      attrValue = customAttributes?.['country'] ?? undefined;
-      break;
-    case 'query_param': {
-      const parts = rule.value.split('=');
-      const paramKey = parts[0];
-      const paramExpected = parts.slice(1).join('=');
-      const paramActual = getQueryParam(paramKey);
-      if (rule.operator === 'exists' || rule.operator === 'not_exists') {
-        return rule.operator === 'exists' ? paramActual !== null : paramActual === null;
-      }
-      attrValue = paramActual;
-      if (parts.length > 1) {
-        return evaluateOperator(rule.operator, paramActual, paramExpected);
-      }
-      break;
-    }
-    case 'cookie': {
-      const cookieParts = rule.value.split('=');
-      const cookieName = cookieParts[0];
-      const cookieExpected = cookieParts.slice(1).join('=');
-      const cookieActual = getCookieValue(cookieName);
-      if (rule.operator === 'exists' || rule.operator === 'not_exists') {
-        return rule.operator === 'exists' ? cookieActual !== null : cookieActual === null;
-      }
-      attrValue = cookieActual;
-      if (cookieParts.length > 1) {
-        return evaluateOperator(rule.operator, cookieActual, cookieExpected);
-      }
-      break;
-    }
-    case 'custom': {
-      const customParts = rule.value.split('=');
-      const customKey = customParts[0];
-      attrValue = customAttributes?.[customKey] ?? undefined;
-      if (customParts.length > 1 && rule.operator !== 'exists' && rule.operator !== 'not_exists') {
-        const customExpected = customParts.slice(1).join('=');
-        return evaluateOperator(rule.operator, attrValue, customExpected);
-      }
-      break;
-    }
-    default:
-      return true;
+function eop(op: string, a: string | null | undefined, b: string): boolean {
+  switch (op) {
+    case 'equals': return a === b;
+    case 'not_equals': return a !== b;
+    case 'contains': return typeof a === 'string' && a.includes(b);
+    case 'not_contains': return typeof a !== 'string' || !a.includes(b);
+    case 'regex': try { return typeof a === 'string' && new RegExp(b).test(a); } catch { return false; }
+    case 'exists': return a != null && a !== '';
+    case 'not_exists': return a == null || a === '';
+    default: return true;
   }
-
-  return evaluateOperator(rule.operator, attrValue, rule.value);
 }
 
-function evaluateOperator(
-  operator: string,
-  actual: string | null | undefined,
-  expected: string
-): boolean {
-  switch (operator) {
-    case 'equals':
-      return actual === expected;
-    case 'not_equals':
-      return actual !== expected;
-    case 'contains':
-      return typeof actual === 'string' && actual.includes(expected);
-    case 'not_contains':
-      return typeof actual === 'string' ? !actual.includes(expected) : true;
-    case 'regex':
-      try {
-        return typeof actual === 'string' && new RegExp(expected).test(actual);
-      } catch {
-        return false;
-      }
-    case 'exists':
-      return actual !== undefined && actual !== null && actual !== '';
-    case 'not_exists':
-      return actual === undefined || actual === null || actual === '';
-    default:
-      return true;
+function kvop(op: string, raw: string, get: (k: string) => string | null | undefined): boolean {
+  const i = raw.indexOf('=');
+  const k = i > -1 ? raw.slice(0, i) : raw;
+  const v = get(k);
+  if (op === 'exists' || op === 'not_exists') return eop(op, v, '');
+  return i > -1 ? eop(op, v, raw.slice(i + 1)) : eop(op, v, raw);
+}
+
+function evalRule(r: TargetingRule, _k: string, a?: Record<string, string>): boolean {
+  switch (r.attribute) {
+    case 'device': return eop(r.operator, devType(), r.value);
+    case 'browser': return eop(r.operator, uam(BR), r.value);
+    case 'os': return eop(r.operator, uam(OL), r.value);
+    case 'language': return eop(r.operator, N?.language || '', r.value);
+    case 'country': return eop(r.operator, a?.['country'], r.value);
+    case 'query_param': return kvop(r.operator, r.value, k => W ? new URLSearchParams(W.location.search).get(k) : null);
+    case 'cookie': return kvop(r.operator, r.value, gc);
+    case 'custom': return kvop(r.operator, r.value, k => a?.[k] ?? null);
+    default: return true;
   }
+}
+
+function addCss(v: Variant, eid: string, m: Map<string, HTMLStyleElement>): void {
+  if (!D || !v.css) return;
+  const a = 'data-ab-css';
+  if (D.querySelector(`style[${a}="${v.id}"]`)) return;
+  const s = D.createElement('style');
+  s.setAttribute(a, v.id);
+  s.textContent = v.css;
+  D.head.appendChild(s);
+  m.set(eid, s);
+}
+
+function runJs(v: Variant): void {
+  if (!v.js) return;
+  try { new Function(v.js)(); } catch (e) { console.error('[AB] JS error ' + v.name + ':', e); }
+}
+
+function goalKey(g: Goal): string { return g.goal_type + (g.value ? ':' + g.value : ''); }
+
+function mkEvt(eid: string, vid: string, uid: string, sid?: string, extra?: Record<string, unknown>): ABEvent {
+  return { type: 'exposure', experiment_id: eid, variant_id: vid, user_id: uid, session_id: sid, timestamp: new Date().toISOString(), ...extra } as ABEvent;
+}
+
+function mkConv(eid: string, vid: string, uid: string, sid: string | undefined, gn: string, gv?: number, md?: Record<string, unknown>): ABEvent {
+  return { type: 'conversion', experiment_id: eid, variant_id: vid, user_id: uid, session_id: sid, goal_name: gn, goal_value: gv, metadata: md, timestamp: new Date().toISOString() } as ABEvent;
 }
 
 export class ABTesting {
-  private config: ABTestingConfig;
-  private experiments: ExperimentConfig[] = [];
-  private project: ProjectInfo | null = null;
-  private batcher: EventBatcher;
-  private exposedExperiments: Set<string> = new Set();
-  private assignedVariants: Map<string, Variant> = new Map();
-  private executedVariantCode: Set<string> = new Set();
-  private goalCleanups: (() => void)[] = [];
-  private firedGoals: Set<string> = new Set();
-  private gaFiredExperiments: Set<string> = new Set();
-  private isPreviewMode = false;
-  private lastUrl: string = typeof window !== 'undefined' ? window.location.href : '';
-  private routeChangeCleanup: (() => void) | null = null;
-  private injectedExperimentStyles: Map<string, HTMLStyleElement> = new Map();
+  #c: ABTestingConfig;
+  #e: ExperimentConfig[] = [];
+  #p: ProjectInfo | null = null;
+  #b: EventBatcher;
+  #seen = new Set<string>();
+  #a = new Map<string, Variant>();
+  #ran = new Set<string>();
+  #cl: (() => void)[] = [];
+  #fg = new Set<string>();
+  #gf = new Set<string>();
+  #pv = false;
+  #lu: string = W ? W.location.href : '';
+  #rc: (() => void) | null = null;
+  #sm = new Map<string, HTMLStyleElement>();
 
-  constructor(config: ABTestingConfig) {
-    if (config.clientKey && !config.projectKey) {
-      console.warn('[ABTesting] clientKey is deprecated. Please use projectKey instead.');
-      config.projectKey = config.clientKey;
-    }
-    if (!config.userId && !config.sessionId && typeof document !== 'undefined') {
-      config.userId = getOrCreateVisitorId();
-    }
-    this.config = config;
-    this.batcher = new EventBatcher(config.apiHost, config.projectKey || config.clientKey || '');
+  constructor(c: ABTestingConfig) {
+    if (c.clientKey && !c.projectKey) c.projectKey = c.clientKey;
+    if (!c.userId && !c.sessionId && D) c.userId = vid();
+    this.#c = c;
+    this.#b = new EventBatcher(c.apiHost, c.projectKey || c.clientKey || '');
   }
 
-  private getProjectKey(): string {
-    return this.config.projectKey || this.config.clientKey || '';
-  }
-
-  private getPreviewToken(): string | null {
-    if (typeof window === 'undefined') return null;
-    try {
-      const params = new URLSearchParams(window.location.search);
-      return params.get('_ab_preview') || null;
-    } catch {
-      return null;
-    }
-  }
-
-  private async handlePreviewMode(token: string): Promise<boolean> {
-    try {
-      const res = await fetch(this.config.apiHost + '/api/ab/preview/' + encodeURIComponent(token));
-      if (!res.ok) return false;
-      const data = await res.json();
-
-      this.isPreviewMode = true;
-
-      if (data.mode === 'client') {
-        const previewVariant: Variant = {
-          id: data.variant_id,
-          name: data.variant_name,
-          weight: 100,
-          js: data.js,
-          css: data.css,
-        };
-        this.injectVariantCode(previewVariant);
-      }
-
-      console.info('[ABTesting] Preview mode active — variant: ' + data.variant_name + ' (experiment: ' + data.experiment_name + ')');
-      return true;
-    } catch {
-      return false;
-    }
-  }
+  #pk(): string { return this.#c.projectKey || this.#c.clientKey || ''; }
+  #uid(): string | undefined { return this.#c.userId || this.#c.sessionId; }
 
   async init(): Promise<void> {
     try {
-      const previewToken = this.getPreviewToken();
-      if (previewToken) {
-        const handled = await this.handlePreviewMode(previewToken);
-        if (handled) return;
-      }
-
-      const projectKey = this.getProjectKey();
-      const cached = getCachedConfig(projectKey);
-
-      if (cached && isCacheFresh(cached)) {
-        this.experiments = cached.experiments;
-        this.project = cached.project || null;
-        return;
-      }
-
-      try {
-        const res = await fetch(
-          this.config.apiHost + '/api/ab/experiments/all-configs?pk=' + encodeURIComponent(projectKey)
-        );
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-        if (data.experiments && data.project) {
-          this.project = data.project;
-          this.experiments = Object.values(data.experiments) as ExperimentConfig[];
-        } else {
-          this.experiments = Array.isArray(data) ? data : Object.values(data);
-        }
-        const newCache: CachedConfig = {
-          experiments: this.experiments,
-          project: this.project || undefined,
-          timestamp: Date.now(),
-        };
-        setCachedConfig(projectKey, newCache);
-      } catch {
-        if (cached) {
-          this.experiments = cached.experiments;
-          this.project = cached.project || null;
-        } else {
-          this.experiments = [];
-        }
-      }
-    } catch {
-      this.experiments = [];
-    } finally {
-      if (this.config.antiFlicker) {
-        revealPage();
-      }
-      this.batcher.start();
-      if (!this.isPreviewMode) {
-        this.startAllGoalTracking();
-        this.installRouteChangeDetection();
-      }
-    }
-  }
-
-  getProject(): ProjectInfo | null {
-    return this.project;
-  }
-
-  private startAllGoalTracking(): void {
-    for (const cleanup of this.goalCleanups) {
-      cleanup();
-    }
-    this.goalCleanups = [];
-    this.firedGoals.clear();
-
-    if (typeof window === 'undefined') return;
-
-    const clickGoals: { experimentName: string; goalName: string; selector: string }[] = [];
-    for (const experiment of this.experiments) {
-      if (experiment.status === 'running' && experiment.goals && experiment.goals.length > 0) {
-        for (const goal of experiment.goals) {
-          if (goal.goal_type === 'click' && goal.value && typeof document !== 'undefined') {
-            clickGoals.push({
-              experimentName: experiment.name,
-              goalName: this.getGoalName(goal),
-              selector: goal.value,
-            });
-          }
-        }
-      }
-    }
-
-    const delegateClicks = clickGoals.length >= 3;
-
-    for (const experiment of this.experiments) {
-      if (
-        experiment.status === 'running' &&
-        experiment.goals &&
-        experiment.goals.length > 0
-      ) {
-        this.startGoalTracking(experiment.name, experiment.goals, delegateClicks);
-      }
-    }
-
-    if (delegateClicks && typeof document !== 'undefined') {
-      const handler = (e: Event) => {
-        const target = e.target;
-        if (!(target instanceof Element)) return;
-        for (const cg of clickGoals) {
+      if (W) {
+        const t = new URLSearchParams(W.location.search).get('_ab_preview');
+        if (t) {
           try {
-            if (target.closest(cg.selector)) {
-              this.trackFor(cg.experimentName, cg.goalName);
+            const r = await fetch(this.#c.apiHost + '/api/ab/preview/' + encodeURIComponent(t));
+            if (r.ok) {
+              const d = await r.json();
+              this.#pv = true;
+              const fv = { id: d.variant_id, name: d.variant_name, weight: 100, css: d.css, js: d.js } as Variant;
+              if (d.mode === 'client') { addCss(fv, '', this.#sm); runJs(fv); }
+              console.info('[AB] Preview: ' + d.variant_name + ' (' + d.experiment_name + ')');
+              return;
             }
           } catch {}
         }
-      };
-      document.addEventListener('click', handler);
-      this.goalCleanups.push(() => {
-        document.removeEventListener('click', handler);
-      });
-    }
-  }
-
-  private getGoalName(goal: Goal): string {
-    return goal.goal_type + (goal.value ? ':' + goal.value : '');
-  }
-
-  private startGoalTracking(experimentName: string, goals: Goal[], delegateClicks: boolean): void {
-    for (const goal of goals) {
-      const goalName = this.getGoalName(goal);
-      switch (goal.goal_type) {
-        case 'url_match': {
-          this.checkUrlGoal(experimentName, goalName, goal);
-          break;
-        }
-        case 'click': {
-          if (!delegateClicks && goal.value && typeof document !== 'undefined') {
-            const handler = (e: Event) => {
-              const target = e.target;
-              if (target instanceof Element && target.closest(goal.value!)) {
-                this.trackFor(experimentName, goalName);
-              }
-            };
-            document.addEventListener('click', handler);
-            this.goalCleanups.push(() => {
-              document.removeEventListener('click', handler);
-            });
-          }
-          break;
-        }
-        case 'custom':
-          break;
       }
-    }
-  }
-
-  getVariant(experimentName: string, fallback: string): string {
-    if (this.isPreviewMode) return fallback;
-
-    const userId = this.config.userId || this.config.sessionId;
-    if (!userId) return fallback;
-
-    const experiment = this.experiments.find(
-      (e) => e.name === experimentName && e.status === 'running'
-    );
-    if (!experiment || !experiment.variants || experiment.variants.length === 0) {
-      return fallback;
-    }
-
-    if (experiment.url_rules && experiment.url_rules.length > 0) {
-      if (typeof window !== 'undefined') {
-        const currentUrl = window.location.href;
-        const excludeRules = experiment.url_rules.filter(r => r.action === 'exclude');
-        const includeRules = experiment.url_rules.filter(r => r.action !== 'exclude');
-
-        // Exclude rules: if any match, return fallback
-        if (excludeRules.length > 0) {
-          const anyExcludeMatch = excludeRules.some(rule => matchesUrl(currentUrl, rule));
-          if (anyExcludeMatch) return fallback;
-        }
-
-        // Include rules: if any exist and none match, return fallback
-        if (includeRules.length > 0) {
-          const anyIncludeMatch = includeRules.some(rule => matchesUrl(currentUrl, rule));
-          if (!anyIncludeMatch) return fallback;
-        }
-      }
-    }
-
-    if (experiment.targeting_rules && experiment.targeting_rules.length > 0) {
-      const allPass = experiment.targeting_rules.every((rule) =>
-        evaluateTargetingRule(rule, this.getProjectKey(), this.config.customAttributes)
-      );
-      if (!allPass) return fallback;
-    }
-
-    const trafficPct = experiment.traffic_percentage ?? 100;
-    const isExcluded = trafficPct < 100 && !this.isInTraffic(experiment.id, userId, trafficPct);
-
-    let variant = this.assignedVariants.get(experiment.id);
-    if (!variant) {
-      if (isExcluded) {
-        const controlVariant = experiment.variants.find((v) => v.is_control) ||
-          experiment.variants.find((v) => v.name.toLowerCase() === 'control') ||
-          experiment.variants[0];
-        variant = controlVariant;
-      } else {
-        variant = assignVariant(experiment.id, userId, experiment.variants);
-      }
-      this.assignedVariants.set(experiment.id, variant);
-    }
-
-    if (!this.exposedExperiments.has(experiment.id)) {
-      this.exposedExperiments.add(experiment.id);
-      this.batcher.push({
-        type: 'exposure',
-        experiment_id: experiment.id,
-        variant_id: variant.id,
-        user_id: userId,
-        session_id: this.config.sessionId,
-        timestamp: new Date().toISOString(),
-        ...(isExcluded ? { metadata: { traffic_excluded: true } } : {}),
-      });
-    }
-
-    if (isExcluded) {
-      return variant.name;
-    }
-
-    if (experiment.ga) {
-      this.fireGaEvent(experiment, variant);
-    }
-
-    if (experiment.mode === 'client' && !this.executedVariantCode.has(variant.id)) {
-      this.executedVariantCode.add(variant.id);
-      this.injectVariantCode(variant, experiment.id);
-    }
-
-    return variant.name;
-  }
-
-  private isInTraffic(experimentId: string, userId: string, percentage: number): boolean {
-    const bucket = fnv1a(experimentId + '::traffic::' + userId) % 100;
-    return bucket < percentage;
-  }
-
-  private fireGaEvent(experiment: ExperimentConfig, variant: Variant): void {
-    if (this.gaFiredExperiments.has(experiment.id)) return;
-    try {
-      if (typeof window !== 'undefined' && typeof window.gtag === 'function') {
-        window.gtag('event', 'ab_assignment', {
-          send_to: experiment.ga!.measurement_id,
-          [experiment.ga!.dimension_name]: variant.name,
-          experiment_id: experiment.id,
-          experiment_name: experiment.name,
-        });
-        this.gaFiredExperiments.add(experiment.id);
-      }
-    } catch {
-    }
-  }
-
-  private injectVariantCss(variant: Variant, experimentId: string): void {
-    if (typeof document === 'undefined' || !variant.css) return;
-    const attrKey = 'data-ab-variant-css';
-    const existing = document.querySelector(`style[${attrKey}="${variant.id}"]`);
-    if (!existing) {
-      const style = document.createElement('style');
-      style.setAttribute(attrKey, variant.id);
-      style.textContent = variant.css;
-      document.head.appendChild(style);
-      this.injectedExperimentStyles.set(experimentId, style);
-    }
-  }
-
-  private injectVariantCode(variant: Variant, experimentId?: string): void {
-    if (typeof document === 'undefined') return;
-
-    if (variant.css) {
-      const attrKey = 'data-ab-variant-css';
-      const existing = document.querySelector(`style[${attrKey}="${variant.id}"]`);
-      if (!existing) {
-        const style = document.createElement('style');
-        style.setAttribute(attrKey, variant.id);
-        style.textContent = variant.css;
-        document.head.appendChild(style);
-        if (experimentId) {
-          this.injectedExperimentStyles.set(experimentId, style);
-        }
-      }
-    }
-
-    if (variant.js) {
+      const pk = this.#pk();
+      const cc = getCachedConfig(pk);
+      if (cc && isCacheFresh(cc)) { this.#e = cc.experiments; this.#p = cc.project || null; return; }
       try {
-        new Function(variant.js)();
-      } catch (err) {
-        console.error('[ABTesting] Error executing variant JS for ' + variant.name + ':', err);
+        const r = await fetch(this.#c.apiHost + '/api/ab/experiments/all-configs?pk=' + encodeURIComponent(pk));
+        if (!r.ok) throw 0;
+        const d = await r.json();
+        if (d.experiments && d.project) { this.#p = d.project; this.#e = Object.values(d.experiments) as ExperimentConfig[]; }
+        else this.#e = Array.isArray(d) ? d : Object.values(d);
+        setCachedConfig(pk, { experiments: this.#e, project: this.#p || undefined, timestamp: Date.now() });
+      } catch { this.#e = cc ? cc.experiments : []; this.#p = cc?.project || null; }
+    } catch { this.#e = []; } finally {
+      if (this.#c.antiFlicker) revealPage();
+      this.#b.start();
+      if (!this.#pv) { this.#goals(); this.#route(); }
+    }
+  }
+
+  getProject(): ProjectInfo | null { return this.#p; }
+
+  #goals(): void {
+    for (const c of this.#cl) c();
+    this.#cl = []; this.#fg.clear();
+    if (!W) return;
+    const cl: { e: string; g: string; s: string }[] = [];
+    for (const e of this.#e) {
+      if (e.status !== 'running' || !e.goals) continue;
+      for (const g of e.goals) {
+        if (g.goal_type === 'click' && g.value && D) cl.push({ e: e.name, g: goalKey(g), s: g.value });
+        if (g.goal_type === 'url_match') this.#urlGoal(e.name, goalKey(g), g);
+      }
+    }
+    if (!cl.length) return;
+    if (cl.length >= 3) {
+      const h = (ev: Event) => { const t = ev.target; if (!(t instanceof Element)) return; for (const c of cl) { try { if (t.closest(c.s)) this.trackFor(c.e, c.g); } catch {} } };
+      D!.addEventListener('click', h);
+      this.#cl.push(() => D!.removeEventListener('click', h));
+    } else {
+      for (const c of cl) {
+        const h = (ev: Event) => { if (ev.target instanceof Element && ev.target.closest(c.s)) this.trackFor(c.e, c.g); };
+        D!.addEventListener('click', h); this.#cl.push(() => D!.removeEventListener('click', h));
       }
     }
   }
 
-  track(goalName: string, options?: TrackOptions): void {
-    if (this.isPreviewMode) return;
-    const userId = this.config.userId || this.config.sessionId;
-    if (!userId) return;
+  getVariant(name: string, fb: string): string {
+    if (this.#pv) return fb;
+    const u = this.#uid();
+    if (!u) return fb;
+    const e = this.#e.find(x => x.name === name && x.status === 'running');
+    if (!e?.variants?.length) return fb;
+    if (!passesRules(e.url_rules)) return fb;
+    if (e.targeting_rules?.length && !e.targeting_rules.every(r => evalRule(r, this.#pk(), this.#c.customAttributes))) return fb;
+    const pct = e.traffic_percentage ?? 100;
+    const ex = pct < 100 && fnv1a(e.id + '::traffic::' + u) % 100 >= pct;
+    let v = this.#a.get(e.id);
+    if (!v) {
+      v = ex ? (e.variants.find(x => x.is_control) || e.variants.find(x => x.name.toLowerCase() === 'control') || e.variants[0]) : assignVariant(e.id, u, e.variants);
+      this.#a.set(e.id, v);
+    }
+    if (!this.#seen.has(e.id)) {
+      this.#seen.add(e.id);
+      this.#b.push(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined));
+    }
+    if (ex) return v.name;
+    if (e.ga && !this.#gf.has(e.id)) {
+      try { if (W?.gtag) { W.gtag('event', 'ab_assignment', { send_to: e.ga.measurement_id, [e.ga.dimension_name]: v.name, experiment_id: e.id, experiment_name: e.name }); this.#gf.add(e.id); } } catch {}
+    }
+    if (e.mode === 'client' && !this.#ran.has(v.id)) { this.#ran.add(v.id); addCss(v, e.id, this.#sm); runJs(v); }
+    return v.name;
+  }
 
-    for (const experimentId of this.exposedExperiments) {
-      const experiment = this.experiments.find((e) => e.id === experimentId);
-      if (!experiment) continue;
-      const variant = this.assignedVariants.get(experimentId);
-      if (!variant) continue;
-      this.batcher.push({
-        type: 'conversion',
-        experiment_id: experiment.id,
-        variant_id: variant.id,
-        user_id: userId,
-        session_id: this.config.sessionId,
-        goal_name: goalName,
-        goal_value: options?.value,
-        metadata: options?.metadata,
-        timestamp: new Date().toISOString(),
-      });
+  track(goal: string, o?: TrackOptions): void {
+    if (this.#pv) return;
+    const u = this.#uid();
+    if (!u) return;
+    for (const eid of this.#seen) {
+      const e = this.#e.find(x => x.id === eid);
+      const v = e && this.#a.get(eid);
+      if (!e || !v) continue;
+      this.#b.push(mkConv(e.id, v.id, u, this.#c.sessionId, goal, o?.value, o?.metadata));
     }
   }
 
-  trackFor(experimentName: string, goalName: string, options?: { value?: number }): void {
-    if (this.isPreviewMode) return;
-    const userId = this.config.userId || this.config.sessionId;
-    if (!userId) return;
-
-    const experiment = this.experiments.find((e) => e.name === experimentName);
-    if (!experiment) return;
-    const variant = this.assignedVariants.get(experiment.id);
-    if (!variant) return;
-
-    this.batcher.push({
-      type: 'conversion',
-      experiment_id: experiment.id,
-      variant_id: variant.id,
-      user_id: userId,
-      session_id: this.config.sessionId,
-      goal_name: goalName,
-      goal_value: options?.value,
-      timestamp: new Date().toISOString(),
-    });
+  trackFor(en: string, gn: string, o?: { value?: number }): void {
+    if (this.#pv) return;
+    const u = this.#uid();
+    if (!u) return;
+    const e = this.#e.find(x => x.name === en);
+    const v = e && this.#a.get(e.id);
+    if (!e || !v) return;
+    this.#b.push(mkConv(e.id, v.id, u, this.#c.sessionId, gn, o?.value));
   }
 
-  private checkUrlGoal(experimentName: string, goalName: string, goal: Goal): void {
-    const goalKey = experimentName + '::' + goalName;
-    if (this.firedGoals.has(goalKey)) return;
-    if (!goal.value) return;
-    const url = window.location.href;
-    const goalMatchType = goal.url_match_type || 'contains';
-    let matched = false;
-    switch (goalMatchType) {
-      case 'exact':
-      case 'equals':
-        matched = url === goal.value;
-        break;
-      case 'contains':
-        matched = url.includes(goal.value);
-        break;
-      case 'starts_with':
-        matched = url.startsWith(goal.value);
-        break;
-      case 'regex':
-        try { matched = new RegExp(goal.value).test(url); } catch { matched = false; }
-        break;
-      default:
-        matched = url.includes(goal.value);
-    }
-    if (matched) {
-      this.firedGoals.add(goalKey);
-      this.trackFor(experimentName, goalName);
+  #urlGoal(en: string, gn: string, g: Goal): void {
+    const k = en + '::' + gn;
+    if (this.#fg.has(k) || !g.value) return;
+    if (urlMatch(W!.location.href, g.url_match_type || 'contains', g.value)) { this.#fg.add(k); this.trackFor(en, gn); }
+  }
+
+  #allUrlGoals(): void {
+    for (const e of this.#e) { if (e.status !== 'running' || !e.goals) continue; for (const g of e.goals) if (g.goal_type === 'url_match') this.#urlGoal(e.name, goalKey(g), g); }
+  }
+
+  #reeval(): void {
+    const u = this.#uid();
+    if (!u) return;
+    for (const e of this.#e) {
+      if (e.status !== 'running' || e.mode !== 'client' || !e.variants?.length) continue;
+      const ok = passesRules(e.url_rules);
+      const tag = this.#sm.get(e.id);
+      if (!ok && tag) { tag.remove(); this.#sm.delete(e.id); }
+      if (!ok || tag) continue;
+      if (e.targeting_rules?.length && !e.targeting_rules.every(r => evalRule(r, this.#pk(), this.#c.customAttributes))) continue;
+      const pct = e.traffic_percentage ?? 100;
+      if (pct < 100 && fnv1a(e.id + '::traffic::' + u) % 100 >= pct) continue;
+      let v = this.#a.get(e.id);
+      if (!v) { v = assignVariant(e.id, u, e.variants); this.#a.set(e.id, v); }
+      addCss(v, e.id, this.#sm);
+      if (v.js && !this.#ran.has(v.id)) { this.#ran.add(v.id); runJs(v); }
     }
   }
 
-  private checkAllUrlGoals(): void {
-    for (const experiment of this.experiments) {
-      if (experiment.status !== 'running' || !experiment.goals) continue;
-      for (const goal of experiment.goals) {
-        if (goal.goal_type === 'url_match') {
-          this.checkUrlGoal(experiment.name, this.getGoalName(goal), goal);
-        }
-      }
-    }
+  #onNav(): void {
+    const u = W!.location.href;
+    if (u === this.#lu) return;
+    this.#lu = u;
+    this.#allUrlGoals();
+    this.#reeval();
   }
 
-  private experimentMatchesUrl(experiment: ExperimentConfig): boolean {
-    if (!experiment.url_rules || experiment.url_rules.length === 0) return true;
-    if (typeof window === 'undefined') return true;
-    const currentUrl = window.location.href;
-    const excludeRules = experiment.url_rules.filter(r => r.action === 'exclude');
-    const includeRules = experiment.url_rules.filter(r => r.action !== 'exclude');
-    if (excludeRules.length > 0 && excludeRules.some(rule => matchesUrl(currentUrl, rule))) return false;
-    if (includeRules.length > 0 && !includeRules.some(rule => matchesUrl(currentUrl, rule))) return false;
-    return true;
+  #route(): void {
+    if (!W || this.#rc) return;
+    const h = () => this.#onNav();
+    const oP = history.pushState, oR = history.replaceState;
+    history.pushState = function(...a: Parameters<typeof history.pushState>) { const r = oP.apply(this, a); h(); return r; };
+    history.replaceState = function(...a: Parameters<typeof history.replaceState>) { const r = oR.apply(this, a); h(); return r; };
+    W.addEventListener('popstate', h);
+    this.#rc = () => { history.pushState = oP; history.replaceState = oR; W.removeEventListener('popstate', h); };
   }
 
-  private reevaluateClientExperiments(): void {
-    const userId = this.config.userId || this.config.sessionId;
-    if (!userId) return;
-
-    for (const experiment of this.experiments) {
-      if (experiment.status !== 'running' || experiment.mode !== 'client') continue;
-      if (!experiment.variants || experiment.variants.length === 0) continue;
-
-      const nowMatches = this.experimentMatchesUrl(experiment);
-      const styleTag = this.injectedExperimentStyles.get(experiment.id);
-
-      if (!nowMatches && styleTag) {
-        styleTag.remove();
-        this.injectedExperimentStyles.delete(experiment.id);
-      }
-
-      if (nowMatches && !styleTag) {
-        if (experiment.targeting_rules && experiment.targeting_rules.length > 0) {
-          const allPass = experiment.targeting_rules.every((rule) =>
-            evaluateTargetingRule(rule, this.getProjectKey(), this.config.customAttributes)
-          );
-          if (!allPass) continue;
-        }
-
-        const trafficPct = experiment.traffic_percentage ?? 100;
-        const isExcluded = trafficPct < 100 && !this.isInTraffic(experiment.id, userId, trafficPct);
-        if (isExcluded) continue;
-
-        let variant = this.assignedVariants.get(experiment.id);
-        if (!variant) {
-          variant = assignVariant(experiment.id, userId, experiment.variants);
-          this.assignedVariants.set(experiment.id, variant);
-        }
-
-        if (variant) {
-          if (variant.css) {
-            this.injectVariantCss(variant, experiment.id);
-          }
-          if (variant.js && !this.executedVariantCode.has(variant.id)) {
-            this.executedVariantCode.add(variant.id);
-            try {
-              new Function(variant.js)();
-            } catch (err) {
-              console.error('[ABTesting] Error executing variant JS for ' + variant.name + ':', err);
-            }
-          }
-        }
-      }
-    }
-  }
-
-  private onRouteChange(): void {
-    const newUrl = window.location.href;
-    if (newUrl === this.lastUrl) return;
-    this.lastUrl = newUrl;
-
-    this.checkAllUrlGoals();
-    this.reevaluateClientExperiments();
-  }
-
-  private installRouteChangeDetection(): void {
-    if (typeof window === 'undefined') return;
-    if (this.routeChangeCleanup) return;
-
-    const handler = () => this.onRouteChange();
-
-    const origPushState = history.pushState;
-    const origReplaceState = history.replaceState;
-
-    history.pushState = function(...args: Parameters<typeof history.pushState>) {
-      const result = origPushState.apply(this, args);
-      handler();
-      return result;
-    };
-
-    history.replaceState = function(...args: Parameters<typeof history.replaceState>) {
-      const result = origReplaceState.apply(this, args);
-      handler();
-      return result;
-    };
-
-    window.addEventListener('popstate', handler);
-
-    this.routeChangeCleanup = () => {
-      history.pushState = origPushState;
-      history.replaceState = origReplaceState;
-      window.removeEventListener('popstate', handler);
-    };
-  }
-
-  pageChanged(): void {
-    this.lastUrl = '';
-    this.onRouteChange();
-  }
+  pageChanged(): void { this.#lu = ''; this.#onNav(); }
 
   destroy(): void {
-    this.batcher.destroy();
-    for (const cleanup of this.goalCleanups) {
-      cleanup();
-    }
-    this.goalCleanups = [];
-    if (this.routeChangeCleanup) {
-      this.routeChangeCleanup();
-      this.routeChangeCleanup = null;
-    }
+    this.#b.destroy();
+    for (const c of this.#cl) c();
+    this.#cl = [];
+    if (this.#rc) { this.#rc(); this.#rc = null; }
   }
 }
 
-if (typeof window !== 'undefined') {
-  window.ABTesting = ABTesting;
-  window.getAntiFlickerSnippet = getAntiFlickerSnippet;
-  try {
-    window.dispatchEvent(new CustomEvent('ab:ready'));
-  } catch {}
+if (W) {
+  W.ABTesting = ABTesting;
+  W.getAntiFlickerSnippet = getAntiFlickerSnippet;
+  try { W.dispatchEvent(new CustomEvent('ab:ready')); } catch {}
 }
