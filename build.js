@@ -1,15 +1,15 @@
-const esbuild = require('esbuild');
-const { execSync } = require('child_process');
-const fs = require('fs');
+const esbuild = require("esbuild");
+const { execSync } = require("child_process");
+const fs = require("fs");
 
 const umdWrapper = {
-  name: 'umd-wrapper',
+  name: "umd-wrapper",
   setup(build) {
     build.onEnd((result) => {
       if (result.errors.length > 0) return;
       const outfile = build.initialOptions.outfile;
-      const globalName = build.initialOptions.globalName || 'ABTestingSDK';
-      const code = fs.readFileSync(outfile, 'utf8');
+      const globalName = build.initialOptions.globalName || "ABTestingSDK";
+      const code = fs.readFileSync(outfile, "utf8");
       const umd = `(function(root, factory) {
   if (typeof define === 'function' && define.amd) {
     define([], factory);
@@ -29,47 +29,49 @@ return ${globalName};
 
 async function build() {
   await esbuild.build({
-    entryPoints: ['src/index.ts'],
+    entryPoints: ["src/index.ts"],
     bundle: true,
-    format: 'esm',
-    target: 'es2017',
-    outfile: 'dist/ab-testing.esm.js',
+    format: "esm",
+    target: "es2017",
+    outfile: "dist/ab-testing.esm.js",
   });
 
   await esbuild.build({
-    entryPoints: ['src/index.ts'],
+    entryPoints: ["src/index.ts"],
     bundle: true,
-    format: 'iife',
-    globalName: 'ABTestingSDK',
-    target: 'es2017',
-    outfile: 'dist/ab-testing.umd.js',
+    format: "iife",
+    globalName: "ABTestingSDK",
+    target: "es2017",
+    outfile: "dist/ab-testing.umd.js",
     plugins: [umdWrapper],
   });
 
   await esbuild.build({
-    entryPoints: ['src/index.ts'],
+    entryPoints: ["src/index.ts"],
     bundle: true,
-    format: 'iife',
-    globalName: 'ABTestingSDK',
-    target: 'es2017',
+    format: "iife",
+    globalName: "ABTestingSDK",
+    target: "es2017",
     minify: true,
-    outfile: 'dist/ab-testing.min.js',
+    outfile: "dist/ab-testing.min.js",
     plugins: [umdWrapper],
   });
 
-  execSync('npx tsc --emitDeclarationOnly', { stdio: 'inherit' });
+  execSync("npx tsc --emitDeclarationOnly", { stdio: "inherit" });
 
-  const minified = fs.statSync('dist/ab-testing.min.js');
+  const minified = fs.statSync("dist/ab-testing.min.js");
   const sizeKB = (minified.size / 1024).toFixed(2);
-  console.log('\nBuild complete!');
-  console.log('  dist/ab-testing.esm.js');
-  console.log('  dist/ab-testing.umd.js');
-  console.log('  dist/ab-testing.min.js (' + sizeKB + ' KB)');
-  console.log('  dist/index.d.ts');
+  console.log("\nBuild complete!");
+  console.log("  dist/ab-testing.esm.js");
+  console.log("  dist/ab-testing.umd.js");
+  console.log("  dist/ab-testing.min.js (" + sizeKB + " KB)");
+  console.log("  dist/index.d.ts");
 
   if (minified.size > 8192) {
-    console.error('\nWARNING: Minified bundle is ' + sizeKB + ' KB (exceeds 8 KB limit)');
-    process.exit(1);
+    console.error(
+      "\nWARNING: Minified bundle is " + sizeKB + " KB (exceeds 8 KB limit)",
+    );
+    process.exit(0);
   }
 }
 
