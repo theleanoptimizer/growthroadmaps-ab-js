@@ -1,4 +1,4 @@
-# A/B Testing Client SDK
+# @growthroadmaps/ab-client
 
 A standalone, zero-dependency client-side JavaScript SDK for running A/B tests. The SDK fetches experiment configurations from the platform API, deterministically assigns users to variants, batches exposure and conversion events, and supports an anti-flicker mode to prevent visible page reflows.
 
@@ -11,12 +11,12 @@ Include the SDK via a script tag or install as an ES module.
 ### Standard Script Tag (no anti-flicker)
 
 ```html
-<script src="https://cdn.your-platform.com/ab.min.js" async></script>
+<script src="https://js.growthroadmaps.com/ab-testing.min.js" async></script>
 <script>
   window.addEventListener('ab:ready', async function() {
     const ab = new ABTesting({
-      clientKey: 'proj_xxx',
-      apiHost: 'https://your-platform.com',
+      projectKey: 'proj_xxx',
+      apiHost: 'https://growthroadmaps.com',
       userId: 'user_123'
     })
     await ab.init()
@@ -42,14 +42,14 @@ Include the SDK via a script tag or install as an ES module.
 </script>
 
 <!-- Step 2: load the SDK async as normal -->
-<script src="https://cdn.your-platform.com/ab.min.js" async></script>
+<script src="https://js.growthroadmaps.com/ab-testing.min.js" async></script>
 
 <!-- Step 3: init with antiFlicker: true — SDK reveals page automatically -->
 <script>
   window.addEventListener('ab:ready', async function() {
     const ab = new ABTesting({
-      clientKey: 'proj_xxx',
-      apiHost: 'https://your-platform.com',
+      projectKey: 'proj_xxx',
+      apiHost: 'https://growthroadmaps.com',
       userId: 'user_123',
       antiFlicker: true
     })
@@ -66,7 +66,7 @@ Include the SDK via a script tag or install as an ES module.
 ### ES Module
 
 ```javascript
-import { ABTesting } from '@your-platform/js'
+import { ABTesting } from '@growthroadmaps/ab-client'
 // identical API, antiFlicker option works the same way
 ```
 
@@ -76,7 +76,7 @@ import { ABTesting } from '@your-platform/js'
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `clientKey` | `string` | Yes | Your project's client key |
+| `projectKey` | `string` | Yes | Your project's public key |
 | `apiHost` | `string` | Yes | The platform API host URL |
 | `userId` | `string` | No | The current user's ID |
 | `sessionId` | `string` | No | The current session ID |
@@ -117,5 +117,5 @@ npm run build
 Outputs:
 - `dist/ab-testing.esm.js` — ES module
 - `dist/ab-testing.umd.js` — UMD
-- `dist/ab-testing.min.js` — Minified UMD (< 8 KB)
+- `dist/ab-testing.min.js` — Minified UMD (~11 KB, ~4.2 KB gzipped)
 - `dist/index.d.ts` — TypeScript declarations
