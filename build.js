@@ -70,12 +70,31 @@ async function build() {
 
   execSync("npx tsc --emitDeclarationOnly", { stdio: "inherit" });
 
+  const loaderResult = await esbuild.build({
+    entryPoints: ["src/loader.ts"],
+    bundle: true,
+    platform: "browser",
+    target: "es2022",
+    format: "iife",
+    minify: true,
+    minifyWhitespace: true,
+    minifyIdentifiers: true,
+    minifySyntax: true,
+    legalComments: "none",
+    drop: ["debugger"],
+    outfile: "dist/ab-loader.min.js",
+    metafile: true,
+  });
+
   const minified = fs.statSync("dist/ab-testing.min.js");
   const sizeKB = (minified.size / 1024).toFixed(2);
+  const loaderFile = fs.statSync("dist/ab-loader.min.js");
+  const loaderSizeKB = (loaderFile.size / 1024).toFixed(2);
   console.log("\nBuild complete!");
   console.log("  dist/ab-testing.esm.js");
   console.log("  dist/ab-testing.umd.js");
   console.log("  dist/ab-testing.min.js (" + sizeKB + " KB)");
+  console.log("  dist/ab-loader.min.js (" + loaderSizeKB + " KB)");
   console.log("  dist/index.d.ts");
 
   if (minified.size > 8192) {
@@ -83,6 +102,12 @@ async function build() {
       "\nWARNING: Minified bundle is " + sizeKB + " KB (exceeds 8 KB limit)",
     );
     process.exit(0);
+  }
+
+  if (loaderFile.size > 2048) {
+    console.error(
+      "\nWARNING: Loader is " + loaderSizeKB + " KB (exceeds 2 KB limit)",
+    );
   }
 }
 

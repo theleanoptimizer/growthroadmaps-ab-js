@@ -32,12 +32,31 @@ function gc(n: string): string | null {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
-function vid(): string {
-  const v = gc('_ab_vid');
-  if (v) return v;
-  const id = uuid();
+function sc(id: string): void {
   if (D) D.cookie = `_ab_vid=${encodeURIComponent(id)};path=/;max-age=31536000;SameSite=Lax`;
+}
+
+function vid(skipCookie?: boolean): string {
+  if (!skipCookie) {
+    const v = gc('_ab_vid');
+    if (v) return v;
+  }
+  const id = uuid();
+  if (!skipCookie) sc(id);
   return id;
+}
+
+function saveAssignments(pk: string, assignments: Map<string, Variant>, experiments: ExperimentConfig[]): void {
+  try {
+    const out: Record<string, { variantId: string; css?: string }> = {};
+    for (const [eid, v] of assignments) {
+      const e = experiments.find(x => x.id === eid);
+      if (e && e.status === 'running' && e.mode === 'client') {
+        out[eid] = { variantId: v.id, css: v.css || undefined };
+      }
+    }
+    localStorage.setItem('ab_va_' + pk, JSON.stringify(out));
+  } catch {}
 }
 
 export { getAntiFlickerSnippet } from './anti-flicker';
@@ -152,16 +171,49 @@ export class ABTesting {
   #lu: string = W ? W.location.href : '';
   #rc: (() => void) | null = null;
   #sm = new Map<string, HTMLStyleElement>();
+  #consent: boolean;
+  #consentRequired: boolean;
+  #pendingEvents: ABEvent[] = [];
 
   constructor(c: ABTestingConfig) {
     if (c.clientKey && !c.projectKey) c.projectKey = c.clientKey;
-    if (!c.userId && !c.sessionId && D) c.userId = vid();
+    this.#consentRequired = c.cookieConsent === 'required';
+    this.#consent = !this.#consentRequired;
+    if (!c.userId && !c.sessionId && D) c.userId = vid(this.#consentRequired);
+    if (W && W.__ab_loader_ran && W.__ab_loader_cfg) {
+      if (!c.projectKey && !c.clientKey) c.projectKey = W.__ab_loader_cfg.pk;
+      if (!c.apiHost && W.__ab_loader_cfg.host) c.apiHost = W.__ab_loader_cfg.host;
+    }
     this.#c = c;
     this.#b = new EventBatcher(c.apiHost, c.projectKey || c.clientKey || '');
   }
 
   #pk(): string { return this.#c.projectKey || this.#c.clientKey || ''; }
   #uid(): string | undefined { return this.#c.userId || this.#c.sessionId; }
+
+  #adoptLoaderStyles(): void {
+    if (!D || !W?.__ab_loader_ran) return;
+    const tags = D.querySelectorAll('style[data-ab-css]');
+    tags.forEach(tag => {
+      const vid = tag.getAttribute('data-ab-css');
+      if (!vid) return;
+      let matched = false;
+      for (const e of this.#e) {
+        if (e.status !== 'running' || e.mode !== 'client') continue;
+        for (const v of e.variants) {
+          if (v.id === vid) {
+            this.#sm.set(e.id, tag as HTMLStyleElement);
+            matched = true;
+            break;
+          }
+        }
+        if (matched) break;
+      }
+      if (!matched) {
+        tag.remove();
+      }
+    });
+  }
 
   async init(): Promise<void> {
     try {
@@ -193,13 +245,42 @@ export class ABTesting {
         setCachedConfig(pk, { experiments: this.#e, project: this.#p || undefined, timestamp: Date.now() });
       } catch { this.#e = cc ? cc.experiments : []; this.#p = cc?.project || null; }
     } catch { this.#e = []; } finally {
-      if (this.#c.antiFlicker) revealPage();
-      this.#b.start();
+      this.#adoptLoaderStyles();
+      revealPage();
+      if (this.#consent) this.#b.start();
       if (!this.#pv) { this.#goals(); this.#route(); }
     }
   }
 
   getProject(): ProjectInfo | null { return this.#p; }
+
+  #pushEvent(e: ABEvent): void {
+    if (this.#consent) {
+      this.#b.push(e);
+    } else {
+      this.#pendingEvents.push(e);
+    }
+  }
+
+  grantConsent(): void {
+    if (this.#consent) return;
+    this.#consent = true;
+    const u = this.#uid();
+    if (u) {
+      const existing = gc('_ab_vid');
+      if (!existing) sc(u);
+    }
+    this.#b.start();
+    for (const e of this.#pendingEvents) this.#b.push(e);
+    this.#pendingEvents = [];
+  }
+
+  revokeConsent(): void {
+    this.#consent = false;
+    this.#pendingEvents = [];
+    if (D) D.cookie = '_ab_vid=;path=/;max-age=0;SameSite=Lax';
+    this.#b.destroy();
+  }
 
   #goals(): void {
     for (const c of this.#cl) c();
@@ -243,13 +324,14 @@ export class ABTesting {
     }
     if (!this.#seen.has(e.id)) {
       this.#seen.add(e.id);
-      this.#b.push(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined));
+      this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined));
     }
     if (ex) return v.name;
     if (e.ga && !this.#gf.has(e.id)) {
       try { if (W?.gtag) { W.gtag('event', 'ab_assignment', { send_to: e.ga.measurement_id, [e.ga.dimension_name]: v.name, experiment_id: e.id, experiment_name: e.name }); this.#gf.add(e.id); } } catch {}
     }
     if (e.mode === 'client' && !this.#ran.has(v.id)) { this.#ran.add(v.id); addCss(v, e.id, this.#sm); runJs(v); }
+    saveAssignments(this.#pk(), this.#a, this.#e);
     return v.name;
   }
 
@@ -261,7 +343,7 @@ export class ABTesting {
       const e = this.#e.find(x => x.id === eid);
       const v = e && this.#a.get(eid);
       if (!e || !v) continue;
-      this.#b.push(mkConv(e.id, v.id, u, this.#c.sessionId, goal, o?.value, o?.metadata));
+      this.#pushEvent(mkConv(e.id, v.id, u, this.#c.sessionId, goal, o?.value, o?.metadata));
     }
   }
 
@@ -272,7 +354,7 @@ export class ABTesting {
     const e = this.#e.find(x => x.name === en);
     const v = e && this.#a.get(e.id);
     if (!e || !v) return;
-    this.#b.push(mkConv(e.id, v.id, u, this.#c.sessionId, gn, o?.value));
+    this.#pushEvent(mkConv(e.id, v.id, u, this.#c.sessionId, gn, o?.value));
   }
 
   #urlGoal(en: string, gn: string, g: Goal): void {

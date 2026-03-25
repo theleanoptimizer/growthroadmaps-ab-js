@@ -79,6 +79,7 @@ export interface ABTestingConfig {
   sessionId?: string;
   antiFlicker?: boolean;
   customAttributes?: Record<string, string>;
+  cookieConsent?: 'required';
 }
 
 export interface ProjectInfo {
@@ -101,6 +102,8 @@ export interface TrackOptions {
 declare global {
   interface Window {
     __ab_reveal?: () => void;
+    __ab_loader_ran?: boolean;
+    __ab_loader_cfg?: { pk: string; host: string };
     ABTesting?: typeof import('./index').ABTesting;
     getAntiFlickerSnippet?: typeof import('./anti-flicker').getAntiFlickerSnippet;
     gtag?: (...args: any[]) => void;
