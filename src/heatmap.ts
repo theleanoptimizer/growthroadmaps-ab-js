@@ -72,19 +72,22 @@ export class HeatmapTracker {
   #currentPageUrl: string;
   #compiledRuleSets: CompiledUrlRule[][];
   #tracking = false;
+  #trackAllPages: boolean;
 
   constructor(
     batcher: EventBatcher,
     userId: string,
     sessionId: string | undefined,
     consentCheck: () => boolean,
-    urlRuleSets: Array<Array<HeatmapUrlRule>>
+    urlRuleSets: Array<Array<HeatmapUrlRule>>,
+    trackAllPages = false,
   ) {
     this.#batcher = batcher;
     this.#userId = userId;
     this.#sessionId = sessionId;
     this.#consent = consentCheck;
     this.#currentPageUrl = window.location.href;
+    this.#trackAllPages = trackAllPages;
 
     this.#compiledRuleSets = urlRuleSets.map(ruleSet =>
       ruleSet.map(rule => {
@@ -96,7 +99,7 @@ export class HeatmapTracker {
       })
     );
 
-    if (this.#compiledRuleSets.length === 0) return;
+    if (this.#compiledRuleSets.length === 0 && !this.#trackAllPages) return;
 
     this.#tracking = this.#shouldTrack();
     this.#attachClickListener();
@@ -105,6 +108,7 @@ export class HeatmapTracker {
   }
 
   #shouldTrack(): boolean {
+    if (this.#trackAllPages) return true;
     if (this.#compiledRuleSets.length === 0) return false;
     const url = this.#currentPageUrl;
     for (const ruleSet of this.#compiledRuleSets) {

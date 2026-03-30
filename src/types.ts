@@ -68,7 +68,7 @@ export interface ConversionEvent {
   timestamp: string;
 }
 
-export type ABEvent = ExposureEvent | ConversionEvent | HeatmapClickEvent | HeatmapScrollEvent;
+export type ABEvent = ExposureEvent | ConversionEvent | HeatmapClickEvent | HeatmapScrollEvent | HeatmapFormEvent;
 
 export interface HeatmapClickEvent {
   type: 'heatmap_click';
@@ -82,6 +82,16 @@ export interface HeatmapClickEvent {
 
 export interface HeatmapScrollEvent {
   type: 'heatmap_scroll';
+  experiment_id?: string;
+  variant_id?: string;
+  user_id: string;
+  session_id?: string;
+  timestamp: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface HeatmapFormEvent {
+  type: 'heatmap_form';
   experiment_id?: string;
   variant_id?: string;
   user_id: string;
@@ -115,12 +125,15 @@ export interface ProjectInfo {
   id: string;
   domain: string;
   ga_dimension_name?: string | null;
+  heatmap_all_pages_enabled?: boolean;
+  form_analytics_all_forms_enabled?: boolean;
 }
 
 export interface CachedConfig {
   experiments: ExperimentConfig[];
   project?: ProjectInfo;
-  heatmapConfigs?: Array<{ url_rules: HeatmapUrlRule[] }>;
+  heatmapConfigs?: Array<{ capture_mode: string; url_rules: HeatmapUrlRule[] }>;
+  formAnalyticsConfigs?: Array<{ capture_mode: string; url_rules: HeatmapUrlRule[]; form_selectors?: string[] }>;
   timestamp: number;
 }
 

@@ -14,6 +14,7 @@ import { getCachedConfig, setCachedConfig, isCacheFresh } from './storage';
 import { EventBatcher } from './batcher';
 import { getAntiFlickerSnippet, revealPage } from './anti-flicker';
 import type { HeatmapTracker } from './heatmap';
+import type { FormTracker } from './form-tracker';
 import type { SurveyManager } from './survey';
 
 interface LazyModule<T> {
@@ -21,6 +22,7 @@ interface LazyModule<T> {
 }
 
 type HeatmapModule = { HeatmapTracker: typeof HeatmapTracker };
+type FormTrackerModule = { FormTracker: typeof FormTracker };
 type SurveyModule = { SurveyManager: typeof SurveyManager };
 
 const W = typeof window !== 'undefined' ? window : undefined;
@@ -184,7 +186,9 @@ export class GrowthRoadmaps {
   #consentRequired: boolean;
   #pendingEvents: ABEvent[] = [];
   #ht: HeatmapTracker | null = null;
-  #hc: Array<{ url_rules: Array<{ match_type: string; value: string }> }> = [];
+  #ft: FormTracker | null = null;
+  #hc: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }> }> = [];
+  #fac: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; form_selectors?: string[] }> = [];
   #sv: SurveyManager | null = null;
 
   constructor(c: GrowthConfig) {
@@ -202,11 +206,18 @@ export class GrowthRoadmaps {
     this.#b = new EventBatcher(c.apiHost, c.projectKey || '');
   }
 
-  async #initHeatmap(urlRuleSets: Array<Array<{ match_type: string; value: string }>>): Promise<void> {
-    if (!D || urlRuleSets.length === 0) return;
+  async #initHeatmap(urlRuleSets: Array<Array<{ match_type: string; value: string }>>, trackAllPages: boolean): Promise<void> {
+    if (!D || (urlRuleSets.length === 0 && !trackAllPages)) return;
     const mod = await import('./heatmap') as HeatmapModule & LazyModule<HeatmapModule>;
     const resolved = typeof mod.__lazyLoad === 'function' ? await mod.__lazyLoad() : mod;
-    this.#ht = new resolved.HeatmapTracker(this.#b, this.#c.userId || this.#c.sessionId || '', this.#c.sessionId, () => this.#consent, urlRuleSets);
+    this.#ht = new resolved.HeatmapTracker(this.#b, this.#c.userId || this.#c.sessionId || '', this.#c.sessionId, () => this.#consent, urlRuleSets, trackAllPages);
+  }
+
+  async #initFormTracker(formConfigs: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; form_selectors?: string[] }>): Promise<void> {
+    if (!D || formConfigs.length === 0) return;
+    const mod = await import('./form-tracker') as FormTrackerModule & LazyModule<FormTrackerModule>;
+    const resolved = typeof mod.__lazyLoad === 'function' ? await mod.__lazyLoad() : mod;
+    this.#ft = new resolved.FormTracker(this.#b, this.#c.userId || this.#c.sessionId || '', this.#c.sessionId, () => this.#consent, formConfigs);
   }
 
   #pk(): string { return this.#c.projectKey || ''; }
@@ -256,7 +267,7 @@ export class GrowthRoadmaps {
       }
       const pk = this.#pk();
       const cc = getCachedConfig(pk);
-      if (cc && isCacheFresh(cc)) { this.#e = cc.experiments; this.#p = cc.project || null; this.#hc = cc.heatmapConfigs || []; return; }
+      if (cc && isCacheFresh(cc)) { this.#e = cc.experiments; this.#p = cc.project || null; this.#hc = cc.heatmapConfigs || []; this.#fac = cc.formAnalyticsConfigs || []; return; }
       try {
         const r = await fetch(this.#c.apiHost + '/api/ab/experiments/all-configs?pk=' + encodeURIComponent(pk));
         if (!r.ok) throw 0;
@@ -264,15 +275,31 @@ export class GrowthRoadmaps {
         if (d.experiments && d.project) { this.#p = d.project; this.#e = Object.values(d.experiments) as ExperimentConfig[]; }
         else this.#e = Array.isArray(d) ? d : Object.values(d);
         if (d.heatmapConfigs) this.#hc = d.heatmapConfigs;
-        setCachedConfig(pk, { experiments: this.#e, project: this.#p || undefined, heatmapConfigs: this.#hc, timestamp: Date.now() });
-      } catch { this.#e = cc ? cc.experiments : []; this.#p = cc?.project || null; this.#hc = cc?.heatmapConfigs || []; }
+        if (d.formAnalyticsConfigs) this.#fac = d.formAnalyticsConfigs;
+        setCachedConfig(pk, { experiments: this.#e, project: this.#p || undefined, heatmapConfigs: this.#hc, formAnalyticsConfigs: this.#fac, timestamp: Date.now() });
+      } catch { this.#e = cc ? cc.experiments : []; this.#p = cc?.project || null; this.#hc = cc?.heatmapConfigs || []; this.#fac = cc?.formAnalyticsConfigs || []; }
     } catch { this.#e = []; } finally {
       this.#adoptLoaderStyles();
       revealPage();
       if (this.#consent) this.#b.start();
       if (!this.#pv) { this.#goals(); this.#route(); }
-      if (this.#c.heatmaps && this.#hc.length > 0) {
-        this.#initHeatmap(this.#hc.map(c => c.url_rules || []));
+      if (this.#c.heatmaps) {
+        const hasAllPages = this.#p?.heatmap_all_pages_enabled === true;
+        const hasAllForms = this.#p?.form_analytics_all_forms_enabled === true;
+        const ruleSets = this.#hc.map(c => c.url_rules || []);
+
+        if (ruleSets.length > 0 || hasAllPages) {
+          this.#initHeatmap(ruleSets, hasAllPages);
+        }
+
+        if (this.#fac.length > 0 || hasAllForms) {
+          const formConfigs: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; form_selectors: string[] }> = [];
+          if (hasAllForms) {
+            formConfigs.push({ capture_mode: 'all_forms', url_rules: [], form_selectors: [] });
+          }
+          formConfigs.push(...this.#fac.map(c => ({ capture_mode: 'specific', url_rules: c.url_rules || [], form_selectors: (c.form_selectors || []) as string[] })));
+          this.#initFormTracker(formConfigs);
+        }
       }
       if (this.#c.surveys) {
         this.#initSurveys();
@@ -359,6 +386,7 @@ export class GrowthRoadmaps {
       try { if (W?.gtag) { W.gtag('event', 'ab_assignment', { send_to: e.ga.measurement_id, [e.ga.dimension_name]: v.name, experiment_id: e.id, experiment_name: e.name }); this.#gf.add(e.id); } } catch {}
     }
     if (this.#ht) this.#ht.setVariantId(v.id);
+    if (this.#ft) this.#ft.setVariantId(v.id);
     if (e.mode === 'client' && !this.#ran.has(v.id)) { this.#ran.add(v.id); addCss(v, e.id, this.#sm); runJs(v); }
     saveAssignments(this.#pk(), this.#a, this.#e);
     return v.name;
@@ -420,6 +448,7 @@ export class GrowthRoadmaps {
     if (u === this.#lu) return;
     this.#lu = u;
     if (this.#ht) this.#ht.pageChanged();
+    if (this.#ft) this.#ft.pageChanged();
     this.#allUrlGoals();
     this.#reeval();
     if (this.#sv) this.#sv.onRouteChange();
@@ -476,6 +505,7 @@ export class GrowthRoadmaps {
 
   destroy(): void {
     if (this.#ht) { this.#ht.destroy(); this.#ht = null; }
+    if (this.#ft) { this.#ft.destroy(); this.#ft = null; }
     this.#b.destroy();
     for (const c of this.#cl) c();
     this.#cl = [];
