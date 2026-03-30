@@ -7,6 +7,10 @@ function escapeHtml(text: string): string {
   return div.innerHTML;
 }
 
+function sanitizeCssValue(value: string): string {
+  return value.replace(/[<>"']/g, '');
+}
+
 interface SurveyContainer {
   host: HTMLDivElement;
   shadow: ShadowRoot;
@@ -31,10 +35,10 @@ let activeWidgets: ActiveWidget[] = [];
 
 function getStyles(styling: SurveyData['styling']): string {
   const s = styling || {};
-  const brandColor = s.brandColor || '#6366f1';
-  const bgColor = s.bgColor || '#ffffff';
-  const textColor = s.textColor || '#1f2937';
-  const borderRadius = (s.borderRadius || '8') + 'px';
+  const brandColor = sanitizeCssValue(s.brandColor || '#6366f1');
+  const bgColor = sanitizeCssValue(s.bgColor || '#ffffff');
+  const textColor = sanitizeCssValue(s.textColor || '#1f2937');
+  const borderRadius = sanitizeCssValue(s.borderRadius || '8') + 'px';
   return '<style>' +
     '*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}' +
     '.gs-card{background:' + bgColor + ';color:' + textColor + ';border-radius:' + borderRadius + ';box-shadow:0 10px 40px rgba(0,0,0,.15);width:380px;max-width:calc(100vw - 40px);max-height:80vh;overflow-y:auto;border-top:3px solid ' + brandColor + ';}' +
