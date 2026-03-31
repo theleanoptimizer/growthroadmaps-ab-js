@@ -282,7 +282,7 @@ export class GrowthRoadmaps {
       this.#adoptLoaderStyles();
       revealPage();
       if (this.#consent) this.#b.start();
-      if (!this.#pv) { this.#goals(); this.#route(); }
+      if (!this.#pv) { this.#goals(); this.#route(); this.#applyClientExperiments(); }
       if (this.#c.heatmaps) {
         const hasAllPages = this.#p?.heatmap_all_pages_enabled === true;
         const hasAllForms = this.#p?.form_analytics_all_forms_enabled === true;
@@ -422,6 +422,36 @@ export class GrowthRoadmaps {
 
   #allUrlGoals(): void {
     for (const e of this.#e) { if (e.status !== 'running' || !e.goals) continue; for (const g of e.goals) if (g.goal_type === 'url_match') this.#urlGoal(e.name, goalKey(g), g); }
+  }
+
+  #applyClientExperiments(): void {
+    const u = this.#uid();
+    if (!u) return;
+    let applied = false;
+    for (const e of this.#e) {
+      if (e.status !== 'running' || e.mode !== 'client' || !e.variants?.length) continue;
+      if (!passesRules(e.url_rules)) continue;
+      if (e.targeting_rules?.length && !e.targeting_rules.every(r => evalRule(r, this.#pk(), this.#c.customAttributes))) continue;
+      const pct = e.traffic_percentage ?? 100;
+      const ex = pct < 100 && fnv1a(e.id + '::traffic::' + u) % 100 >= pct;
+      let v = this.#a.get(e.id);
+      if (!v) {
+        v = ex ? (e.variants.find(x => x.is_control) || e.variants.find(x => x.name.toLowerCase() === 'control') || e.variants[0]) : assignVariant(e.id, u, e.variants);
+        this.#a.set(e.id, v);
+      }
+      if (!this.#seen.has(e.id)) {
+        this.#seen.add(e.id);
+        this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined));
+      }
+      if (!ex) {
+        if (e.ga && !this.#gf.has(e.id)) {
+          try { if (W?.gtag) { W.gtag('event', 'ab_assignment', { send_to: e.ga.measurement_id, [e.ga.dimension_name]: v.name, experiment_id: e.id, experiment_name: e.name }); this.#gf.add(e.id); } } catch {}
+        }
+        if (!this.#ran.has(v.id)) { this.#ran.add(v.id); addCss(v, e.id, this.#sm); runJs(v); }
+        applied = true;
+      }
+    }
+    if (applied) saveAssignments(this.#pk(), this.#a, this.#e);
   }
 
   #reeval(): void {
