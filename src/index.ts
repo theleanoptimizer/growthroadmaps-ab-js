@@ -224,7 +224,7 @@ export class GrowthRoadmaps {
   #uid(): string | undefined { return this.#c.userId || this.#c.sessionId; }
 
   #adoptLoaderStyles(): void {
-    if (!D || !W?.__gr_loader_ran) return;
+    if (!D || !W?.__gr_loader_ran || this.#pv) return;
     const tags = D.querySelectorAll('style[data-ab-css]');
     tags.forEach(tag => {
       const vid = tag.getAttribute('data-ab-css');
