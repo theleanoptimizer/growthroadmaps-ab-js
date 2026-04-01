@@ -1,4 +1,4 @@
-export function getAntiFlickerSnippet(maxHideMs: number = 3000): string {
+export function getAntiFlickerSnippet(maxHideMs: number = 1000): string {
   return "(function(){var t=setTimeout(function(){document.documentElement.style.opacity='1'}," +
     maxHideMs +
     ");document.documentElement.style.opacity='0';window.__ab_reveal=function(){clearTimeout(t);document.documentElement.style.opacity='1'};})()";

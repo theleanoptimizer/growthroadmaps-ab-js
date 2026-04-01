@@ -9,7 +9,7 @@
   var host = cfg.host as string;
 
   D.documentElement.style.opacity = '0';
-  var t = setTimeout(function() { D.documentElement.style.opacity = '1'; }, 3000);
+  var t = setTimeout(function() { D.documentElement.style.opacity = '1'; }, 1000);
   W.__ab_reveal = function() { clearTimeout(t); D.documentElement.style.opacity = '1'; };
 
   var ck = '_ab_vid';
