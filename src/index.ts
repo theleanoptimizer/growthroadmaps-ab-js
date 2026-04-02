@@ -59,11 +59,11 @@ function vid(skipCookie?: boolean): string {
 
 function saveAssignments(pk: string, assignments: Map<string, Variant>, experiments: ExperimentConfig[]): void {
   try {
-    const out: Record<string, { variantId: string; css?: string }> = {};
+    const out: Record<string, { variantId: string; css?: string; external_css?: string[]; external_js?: string[] }> = {};
     for (const [eid, v] of assignments) {
       const e = experiments.find(x => x.id === eid);
       if (e && e.status === 'running' && e.mode === 'client') {
-        out[eid] = { variantId: v.id, css: v.css || undefined };
+        out[eid] = { variantId: v.id, css: v.css || undefined, external_css: v.external_css || undefined, external_js: v.external_js || undefined };
       }
     }
     localStorage.setItem('ab_va_' + pk, JSON.stringify(out));
@@ -78,6 +78,9 @@ function urlMatch(url: string, type: string, val: string): boolean {
     case 'exact': case 'equals': return url === val;
     case 'contains': return url.includes(val);
     case 'starts_with': return url.startsWith(val);
+    case 'ends_with': return url.endsWith(val);
+    case 'wildcard': try { const p = val.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*'); return new RegExp('^' + p + '$').test(url); } catch { return false; }
+    case 'matches': try { const path = new URL(url).pathname; return path === val || path === val.replace(/\/$/, '') || path.replace(/\/$/, '') === val; } catch { return false; }
     case 'regex': try { return new RegExp(val).test(url); } catch { return false; }
     default: return url.includes(val);
   }
@@ -142,7 +145,20 @@ function evalRule(r: TargetingRule, _k: string, a?: Record<string, string>): boo
 }
 
 function addCss(v: Variant, eid: string, m: Map<string, HTMLStyleElement>): void {
-  if (!D || !v.css) return;
+  if (!D) return;
+  if (v.external_css && v.external_css.length) {
+    for (var i = 0; i < v.external_css.length; i++) {
+      var href = v.external_css[i];
+      if (!D.querySelector('link[data-ab-ext-css="' + v.id + '"][href="' + href + '"]')) {
+        var lk = D.createElement('link');
+        lk.rel = 'stylesheet';
+        lk.href = href;
+        lk.setAttribute('data-ab-ext-css', v.id);
+        D.head.appendChild(lk);
+      }
+    }
+  }
+  if (!v.css) return;
   const a = 'data-ab-css';
   if (D.querySelector(`style[${a}="${v.id}"]`)) return;
   const s = D.createElement('style');
@@ -150,6 +166,35 @@ function addCss(v: Variant, eid: string, m: Map<string, HTMLStyleElement>): void
   s.textContent = v.css;
   D.head.appendChild(s);
   m.set(eid, s);
+}
+
+function loadExternalJs(v: Variant): Promise<void> {
+  if (!D || !v.external_js || !v.external_js.length) return Promise.resolve();
+  var chain: Promise<void> = Promise.resolve();
+  for (var i = 0; i < v.external_js.length; i++) {
+    (function(src: string) {
+      chain = chain.then(function() {
+        var existing = D!.querySelector('script[data-ab-ext-js="' + v.id + '"][src="' + src + '"]') as HTMLScriptElement | null;
+        if (existing) {
+          if (existing.getAttribute('data-ab-loaded') === '1') return Promise.resolve();
+          return new Promise<void>(function(resolve) {
+            existing!.addEventListener('load', function() { resolve(); });
+            existing!.addEventListener('error', function() { resolve(); });
+            if (existing!.getAttribute('data-ab-loaded') === '1') resolve();
+          });
+        }
+        return new Promise<void>(function(resolve) {
+          var sc = D!.createElement('script');
+          sc.src = src;
+          sc.setAttribute('data-ab-ext-js', v.id);
+          sc.onload = function() { sc.setAttribute('data-ab-loaded', '1'); resolve(); };
+          sc.onerror = function() { sc.setAttribute('data-ab-loaded', '1'); resolve(); };
+          D!.head.appendChild(sc);
+        });
+      });
+    })(v.external_js[i]);
+  }
+  return chain;
 }
 
 function runJs(v: Variant): void {
@@ -257,8 +302,8 @@ export class GrowthRoadmaps {
             if (r.ok) {
               const d = await r.json();
               this.#pv = true;
-              const fv = { id: d.variant_id, name: d.variant_name, weight: 100, css: d.css, js: d.js } as Variant;
-              if (d.mode === 'client') { addCss(fv, '', this.#sm); runJs(fv); }
+              const fv = { id: d.variant_id, name: d.variant_name, weight: 100, css: d.css, js: d.js, external_js: d.external_js, external_css: d.external_css } as Variant;
+              if (d.mode === 'client') { addCss(fv, '', this.#sm); loadExternalJs(fv).then(function() { runJs(fv); }); }
               console.info('[GR] Preview: ' + d.variant_name + ' (' + d.experiment_name + ')');
               return;
             }
@@ -391,7 +436,7 @@ export class GrowthRoadmaps {
     }
     if (this.#ht) this.#ht.setVariantId(v.id);
     if (this.#ft) this.#ft.setVariantId(v.id);
-    if (e.mode === 'client' && !this.#ran.has(v.id)) { this.#ran.add(v.id); addCss(v, e.id, this.#sm); runJs(v); }
+    if (e.mode === 'client' && !this.#ran.has(v.id)) { this.#ran.add(v.id); addCss(v, e.id, this.#sm); loadExternalJs(v).then(function() { runJs(v); }); }
     saveAssignments(this.#pk(), this.#a, this.#e);
     return v.name;
   }
@@ -451,7 +496,7 @@ export class GrowthRoadmaps {
         if (e.ga && !this.#gf.has(e.id)) {
           try { if (W?.gtag) { const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; W.gtag('event', 'ab_assignment', { send_to: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name }); this.#gf.add(e.id); } } catch {}
         }
-        if (!this.#ran.has(v.id)) { this.#ran.add(v.id); addCss(v, e.id, this.#sm); runJs(v); }
+        if (!this.#ran.has(v.id)) { this.#ran.add(v.id); addCss(v, e.id, this.#sm); loadExternalJs(v).then(function() { runJs(v); }); }
         applied = true;
       }
     }
@@ -473,7 +518,7 @@ export class GrowthRoadmaps {
       let v = this.#a.get(e.id);
       if (!v) { v = assignVariant(e.id, u, e.variants); this.#a.set(e.id, v); }
       addCss(v, e.id, this.#sm);
-      if (v.js && !this.#ran.has(v.id)) { this.#ran.add(v.id); runJs(v); }
+      if ((v.js || (v.external_js && v.external_js.length)) && !this.#ran.has(v.id)) { this.#ran.add(v.id); loadExternalJs(v).then(function() { runJs(v); }); }
     }
   }
 

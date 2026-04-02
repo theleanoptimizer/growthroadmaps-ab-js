@@ -6,11 +6,13 @@ export interface Variant {
   index?: number;
   js?: string | null;
   css?: string | null;
+  external_js?: string[] | null;
+  external_css?: string[] | null;
 }
 
 export interface UrlRule {
   id: string;
-  match_type: 'exact' | 'equals' | 'contains' | 'starts_with' | 'regex';
+  match_type: 'exact' | 'equals' | 'contains' | 'starts_with' | 'ends_with' | 'wildcard' | 'matches' | 'regex';
   value: string;
   action?: 'include' | 'exclude';
 }

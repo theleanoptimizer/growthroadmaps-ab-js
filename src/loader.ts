@@ -79,12 +79,36 @@
         for (var eid in assignments) {
           if (!eligible[eid]) continue;
           var a = assignments[eid];
+          if (a && a.external_css && a.external_css.length) {
+            for (var k = 0; k < a.external_css.length; k++) {
+              if (!D.querySelector('link[data-ab-ext-css="' + a.variantId + '"][href="' + a.external_css[k] + '"]')) {
+                var lk = D.createElement('link');
+                lk.rel = 'stylesheet';
+                lk.href = a.external_css[k];
+                lk.setAttribute('data-ab-ext-css', a.variantId);
+                D.head.appendChild(lk);
+                applied = true;
+              }
+            }
+          }
           if (a && a.css && !D.querySelector('style[data-ab-css="' + a.variantId + '"]')) {
             var s = D.createElement('style');
             s.setAttribute('data-ab-css', a.variantId);
             s.textContent = a.css;
             D.head.appendChild(s);
             applied = true;
+          }
+          if (a && a.external_js && a.external_js.length) {
+            for (var m = 0; m < a.external_js.length; m++) {
+              if (!D.querySelector('script[data-ab-ext-js="' + a.variantId + '"][src="' + a.external_js[m] + '"]')) {
+                var ejs = D.createElement('script');
+                ejs.src = a.external_js[m];
+                ejs.setAttribute('data-ab-ext-js', a.variantId);
+                ejs.onload = function() { this.setAttribute('data-ab-loaded', '1'); };
+                ejs.onerror = function() { this.setAttribute('data-ab-loaded', '1'); };
+                D.head.appendChild(ejs);
+              }
+            }
           }
         }
         if (applied) {
