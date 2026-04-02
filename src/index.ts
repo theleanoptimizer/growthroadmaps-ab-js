@@ -267,23 +267,27 @@ export class GrowthRoadmaps {
       }
       const pk = this.#pk();
       const cc = getCachedConfig(pk);
-      if (cc && isCacheFresh(cc)) { this.#e = cc.experiments; this.#p = cc.project || null; this.#hc = cc.heatmapConfigs || []; this.#fac = cc.formAnalyticsConfigs || []; return; }
+      const useCached = cc && isCacheFresh(cc);
+      if (useCached) { this.#e = cc.experiments; this.#p = cc.project || null; this.#hc = cc.heatmapConfigs || []; this.#fac = cc.formAnalyticsConfigs || []; }
       try {
         const r = await fetch(this.#c.apiHost + '/api/ab/experiments/all-configs?pk=' + encodeURIComponent(pk));
         if (!r.ok) throw 0;
         const d = await r.json();
-        if (d.experiments && d.project) { this.#p = d.project; this.#e = Object.values(d.experiments) as ExperimentConfig[]; }
-        else this.#e = Array.isArray(d) ? d : Object.values(d);
+        if (d.project) this.#p = d.project;
+        if (!useCached) {
+          if (d.experiments) this.#e = Object.values(d.experiments) as ExperimentConfig[];
+          else this.#e = Array.isArray(d) ? d : Object.values(d);
+        }
         if (d.heatmapConfigs) this.#hc = d.heatmapConfigs;
         if (d.formAnalyticsConfigs) this.#fac = d.formAnalyticsConfigs;
         setCachedConfig(pk, { experiments: this.#e, project: this.#p || undefined, heatmapConfigs: this.#hc, formAnalyticsConfigs: this.#fac, timestamp: Date.now() });
-      } catch { this.#e = cc ? cc.experiments : []; this.#p = cc?.project || null; this.#hc = cc?.heatmapConfigs || []; this.#fac = cc?.formAnalyticsConfigs || []; }
+      } catch { if (!useCached) { this.#e = cc ? cc.experiments : []; this.#p = cc?.project || null; this.#hc = cc?.heatmapConfigs || []; this.#fac = cc?.formAnalyticsConfigs || []; } }
     } catch { this.#e = []; } finally {
       this.#adoptLoaderStyles();
       revealPage();
       if (this.#consent) this.#b.start();
       if (!this.#pv) { this.#goals(); this.#route(); this.#applyClientExperiments(); }
-      if (this.#c.heatmaps) {
+      if (this.#c.heatmaps && this.#p?.heatmaps_enabled !== false) {
         const hasAllPages = this.#p?.heatmap_all_pages_enabled === true;
         const hasAllForms = this.#p?.form_analytics_all_forms_enabled === true;
         const ruleSets = this.#hc.map(c => c.url_rules || []);
@@ -301,7 +305,7 @@ export class GrowthRoadmaps {
           this.#initFormTracker(formConfigs);
         }
       }
-      if (this.#c.surveys) {
+      if (this.#c.surveys && this.#p?.surveys_enabled !== false) {
         this.#initSurveys();
       }
     }
@@ -383,7 +387,7 @@ export class GrowthRoadmaps {
     }
     if (ex) return v.name;
     if (e.ga && !this.#gf.has(e.id)) {
-      try { if (W?.gtag) { W.gtag('event', 'ab_assignment', { send_to: e.ga.measurement_id, [e.ga.dimension_name]: v.name, experiment_id: e.id, experiment_name: e.name }); this.#gf.add(e.id); } } catch {}
+      try { if (W?.gtag) { const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; W.gtag('event', 'ab_assignment', { send_to: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name }); this.#gf.add(e.id); } } catch {}
     }
     if (this.#ht) this.#ht.setVariantId(v.id);
     if (this.#ft) this.#ft.setVariantId(v.id);
@@ -445,7 +449,7 @@ export class GrowthRoadmaps {
       }
       if (!ex) {
         if (e.ga && !this.#gf.has(e.id)) {
-          try { if (W?.gtag) { W.gtag('event', 'ab_assignment', { send_to: e.ga.measurement_id, [e.ga.dimension_name]: v.name, experiment_id: e.id, experiment_name: e.name }); this.#gf.add(e.id); } } catch {}
+          try { if (W?.gtag) { const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; W.gtag('event', 'ab_assignment', { send_to: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name }); this.#gf.add(e.id); } } catch {}
         }
         if (!this.#ran.has(v.id)) { this.#ran.add(v.id); addCss(v, e.id, this.#sm); runJs(v); }
         applied = true;

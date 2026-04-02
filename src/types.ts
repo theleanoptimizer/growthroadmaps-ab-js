@@ -3,6 +3,7 @@ export interface Variant {
   name: string;
   weight: number;
   is_control?: boolean;
+  index?: number;
   js?: string | null;
   css?: string | null;
 }
@@ -39,6 +40,7 @@ export interface ExperimentConfig {
   status: string;
   mode?: string;
   traffic_percentage?: number;
+  sequence_number?: number | null;
   variants: Variant[];
   url_rules?: UrlRule[];
   goals?: Goal[];
@@ -127,6 +129,8 @@ export interface ProjectInfo {
   ga_dimension_name?: string | null;
   heatmap_all_pages_enabled?: boolean;
   form_analytics_all_forms_enabled?: boolean;
+  heatmaps_enabled?: boolean;
+  surveys_enabled?: boolean;
 }
 
 export interface CachedConfig {
