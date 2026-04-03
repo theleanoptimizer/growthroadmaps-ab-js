@@ -403,23 +403,59 @@ export class GrowthRoadmaps {
     this.#cl = []; this.#fg.clear();
     if (!W) return;
     const cl: { e: string; g: string; s: string }[] = [];
+    const engagementGoals: { e: string; g: string; value: string; matchType: string }[] = [];
+    const formGoals: { e: string; g: string; value: string; matchType: string }[] = [];
     for (const e of this.#e) {
       if (e.status !== 'running' || !e.goals) continue;
       for (const g of e.goals) {
         if (g.goal_type === 'click' && g.value && D) cl.push({ e: e.name, g: goalKey(g), s: g.value });
         if (g.goal_type === 'url_match') this.#urlGoal(e.name, goalKey(g), g);
+        if (g.goal_type === 'engagement' && g.value) engagementGoals.push({ e: e.name, g: goalKey(g), value: g.value, matchType: g.url_match_type || 'contains' });
+        if (g.goal_type === 'form_submit') formGoals.push({ e: e.name, g: goalKey(g), value: g.value || '', matchType: g.url_match_type || 'contains' });
       }
     }
-    if (!cl.length) return;
-    if (cl.length >= 3) {
-      const h = (ev: Event) => { const t = ev.target; if (!(t instanceof Element)) return; for (const c of cl) { try { if (t.closest(c.s)) this.trackFor(c.e, c.g); } catch {} } };
-      D!.addEventListener('click', h);
-      this.#cl.push(() => D!.removeEventListener('click', h));
-    } else {
-      for (const c of cl) {
-        const h = (ev: Event) => { if (ev.target instanceof Element && ev.target.closest(c.s)) this.trackFor(c.e, c.g); };
-        D!.addEventListener('click', h); this.#cl.push(() => D!.removeEventListener('click', h));
+    if (cl.length) {
+      if (cl.length >= 3) {
+        const h = (ev: Event) => { const t = ev.target; if (!(t instanceof Element)) return; for (const c of cl) { try { if (t.closest(c.s)) this.trackFor(c.e, c.g); } catch {} } };
+        D!.addEventListener('click', h);
+        this.#cl.push(() => D!.removeEventListener('click', h));
+      } else {
+        for (const c of cl) {
+          const h = (ev: Event) => { if (ev.target instanceof Element && ev.target.closest(c.s)) this.trackFor(c.e, c.g); };
+          D!.addEventListener('click', h); this.#cl.push(() => D!.removeEventListener('click', h));
+        }
       }
+    }
+    if (engagementGoals.length && D) {
+      const engagementTags = new Set(['A', 'BUTTON', 'INPUT', 'TEXTAREA', 'SELECT', 'LABEL', 'IMG']);
+      const h = (ev: Event) => {
+        const t = ev.target;
+        if (!(t instanceof Element)) return;
+        const el = engagementTags.has(t.tagName) ? t : t.closest('a,button,input,textarea,select,label,img');
+        if (!el) return;
+        const url = W!.location.href;
+        for (const eg of engagementGoals) {
+          const k = eg.e + '::' + eg.g;
+          if (this.#fg.has(k)) continue;
+          if (urlMatch(url, eg.matchType, eg.value)) { this.#fg.add(k); this.trackFor(eg.e, eg.g); }
+        }
+      };
+      D.addEventListener('mousedown', h);
+      this.#cl.push(() => D!.removeEventListener('mousedown', h));
+    }
+    if (formGoals.length && D) {
+      const h = (ev: Event) => {
+        const form = ev.target;
+        if (!(form instanceof HTMLFormElement)) return;
+        const action = form.action || W!.location.href;
+        for (const fg of formGoals) {
+          const k = fg.e + '::' + fg.g;
+          if (this.#fg.has(k)) continue;
+          if (!fg.value || urlMatch(action, fg.matchType, fg.value)) { this.#fg.add(k); this.trackFor(fg.e, fg.g); }
+        }
+      };
+      D.addEventListener('submit', h);
+      this.#cl.push(() => D!.removeEventListener('submit', h));
     }
   }
 

@@ -19,7 +19,7 @@ export interface UrlRule {
 
 export interface Goal {
   id: string;
-  goal_type: 'url_match' | 'click' | 'custom';
+  goal_type: 'url_match' | 'click' | 'custom' | 'engagement' | 'form_submit';
   value?: string;
   url_match_type?: string;
 }
