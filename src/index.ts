@@ -74,12 +74,37 @@ function saveAssignments(pk: string, assignments: Map<string, Variant>, experime
     const out: Record<string, { variantId: string; css?: string; external_css?: string[]; external_js?: string[] }> = {};
     for (const [eid, v] of assignments) {
       const e = experiments.find(x => x.id === eid);
-      if (e && e.status === 'running' && e.mode === 'client') {
-        out[eid] = { variantId: v.id, css: v.css || undefined, external_css: v.external_css || undefined, external_js: v.external_js || undefined };
+      if (e && e.status === 'running') {
+        const entry: { variantId: string; css?: string; external_css?: string[]; external_js?: string[] } = { variantId: v.id };
+        if (e.mode === 'client') {
+          if (v.css) entry.css = v.css;
+          if (v.external_css) entry.external_css = v.external_css;
+          if (v.external_js) entry.external_js = v.external_js;
+        }
+        out[eid] = entry;
       }
     }
     localStorage.setItem('ab_va_' + pk, JSON.stringify(out));
   } catch {}
+}
+
+function loadAssignments(pk: string, experiments: ExperimentConfig[]): Map<string, Variant> {
+  const map = new Map<string, Variant>();
+  try {
+    const raw = localStorage.getItem('ab_va_' + pk);
+    if (!raw) return map;
+    const saved: Record<string, { variantId: string; css?: string; external_css?: string[]; external_js?: string[] }> = JSON.parse(raw);
+    if (!saved || typeof saved !== 'object') return map;
+    for (const eid in saved) {
+      const entry = saved[eid];
+      if (!entry || !entry.variantId) continue;
+      const e = experiments.find(x => x.id === eid && x.status === 'running');
+      if (!e || !e.variants?.length) continue;
+      const v = e.variants.find(x => x.id === entry.variantId);
+      if (v) map.set(eid, v);
+    }
+  } catch {}
+  return map;
 }
 
 export { getAntiFlickerSnippet } from './anti-flicker';
@@ -343,7 +368,13 @@ export class GrowthRoadmaps {
       this.#adoptLoaderStyles();
       revealPage();
       if (this.#consent) this.#b.start();
-      if (!this.#pv) { this.#goals(); this.#route(); this.#applyClientExperiments(); }
+      if (!this.#pv) {
+        const restored = loadAssignments(this.#pk(), this.#e);
+        for (const [eid, v] of restored) {
+          if (!this.#a.has(eid)) this.#a.set(eid, v);
+        }
+        this.#goals(); this.#route(); this.#applyClientExperiments();
+      }
       if (this.#c.heatmaps && this.#p?.heatmaps_enabled !== false) {
         const hasAllPages = this.#p?.heatmap_all_pages_enabled === true;
         const hasAllForms = this.#p?.form_analytics_all_forms_enabled === true;
@@ -493,10 +524,9 @@ export class GrowthRoadmaps {
     if (this.#pv) return;
     const u = this.#uid();
     if (!u) return;
-    for (const eid of this.#seen) {
+    for (const [eid, v] of this.#a) {
       const e = this.#e.find(x => x.id === eid);
-      const v = e && this.#a.get(eid);
-      if (!e || !v) continue;
+      if (!e) continue;
       this.#pushEvent(mkConv(e.id, v.id, u, this.#c.sessionId, goal, o?.value, o?.metadata));
     }
   }
