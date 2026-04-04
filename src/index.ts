@@ -272,10 +272,18 @@ export class GrowthRoadmaps {
   #hc: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }> }> = [];
   #fac: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; form_selectors?: string[] }> = [];
   #sv: SurveyManager | null = null;
+  #debug = false;
 
   constructor(c: GrowthConfig) {
     this.#consentRequired = c.cookieConsent === 'required';
     this.#consent = !this.#consentRequired;
+    if (W) {
+      const sp = new URLSearchParams(W.location.search);
+      const dp = sp.get('_ab_debug');
+      if (dp === 'true') { this.#debug = true; try { sessionStorage.setItem('_ab_debug', '1'); } catch {} }
+      else if (dp === 'false') { this.#debug = false; try { sessionStorage.removeItem('_ab_debug'); } catch {} }
+      else { try { if (sessionStorage.getItem('_ab_debug') === '1') this.#debug = true; } catch {} }
+    }
     if (!c.userId && !c.sessionId && D) c.userId = vid(this.#consentRequired);
     if (W && W.__gr_loader_ran) {
       const cfg = W.__gr_loader_cfg;
@@ -285,8 +293,11 @@ export class GrowthRoadmaps {
       }
     }
     this.#c = c;
-    this.#b = new EventBatcher(c.apiHost, c.projectKey || '');
+    this.#b = new EventBatcher(c.apiHost, c.projectKey || '', this.#debug);
+    if (this.#debug) console.log('[GR Debug] SDK initialized', { projectKey: c.projectKey, apiHost: c.apiHost, userId: c.userId });
   }
+
+  #dbg(...args: unknown[]): void { if (this.#debug) console.log('[GR Debug]', ...args); }
 
   async #initHeatmap(urlRuleSets: Array<Array<{ match_type: string; value: string }>>, trackAllPages: boolean): Promise<void> {
     if (!D || (urlRuleSets.length === 0 && !trackAllPages)) return;
@@ -365,13 +376,20 @@ export class GrowthRoadmaps {
         setCachedConfig(pk, { experiments: this.#e, project: this.#p || undefined, heatmapConfigs: this.#hc, formAnalyticsConfigs: this.#fac, timestamp: Date.now() });
       } catch { if (!useCached) { this.#e = cc ? cc.experiments : []; this.#p = cc?.project || null; this.#hc = cc?.heatmapConfigs || []; this.#fac = cc?.formAnalyticsConfigs || []; } }
     } catch { this.#e = []; } finally {
+      const running = this.#e.filter(x => x.status === 'running');
+      this.#dbg('Config loaded:', running.length, 'running experiments', running.map(x => x.name));
+      if (this.#p) this.#dbg('Project:', this.#p.domain || this.#p.id);
       this.#adoptLoaderStyles();
       revealPage();
       if (this.#consent) this.#b.start();
       if (!this.#pv) {
         const restored = loadAssignments(this.#pk(), this.#e);
         for (const [eid, v] of restored) {
-          if (!this.#a.has(eid)) this.#a.set(eid, v);
+          if (!this.#a.has(eid)) {
+            this.#a.set(eid, v);
+            const eName = this.#e.find(x => x.id === eid)?.name;
+            this.#dbg('Restored assignment:', eName, '→', v.name);
+          }
         }
         this.#goals(); this.#route(); this.#applyClientExperiments();
       }
@@ -439,6 +457,7 @@ export class GrowthRoadmaps {
     for (const e of this.#e) {
       if (e.status !== 'running' || !e.goals) continue;
       for (const g of e.goals) {
+        this.#dbg('Goal registered:', e.name, '→', g.goal_type, g.value || '');
         if (g.goal_type === 'click' && g.value && D) cl.push({ e: e.name, g: goalKey(g), s: g.value });
         if (g.goal_type === 'url_match') this.#urlGoal(e.name, goalKey(g), g);
         if (g.goal_type === 'engagement' && g.value) engagementGoals.push({ e: e.name, g: goalKey(g), value: g.value, matchType: g.url_match_type || 'contains' });
@@ -447,12 +466,12 @@ export class GrowthRoadmaps {
     }
     if (cl.length) {
       if (cl.length >= 3) {
-        const h = (ev: Event) => { const t = ev.target; if (!(t instanceof Element)) return; for (const c of cl) { try { if (t.closest(c.s)) this.trackFor(c.e, c.g); } catch {} } };
+        const h = (ev: Event) => { const t = ev.target; if (!(t instanceof Element)) return; for (const c of cl) { try { const matched = !!t.closest(c.s); this.#dbg('Click goal check:', c.e, '| selector:', c.s, '| matched:', matched); if (matched) this.trackFor(c.e, c.g); } catch {} } };
         D!.addEventListener('click', h);
         this.#cl.push(() => D!.removeEventListener('click', h));
       } else {
         for (const c of cl) {
-          const h = (ev: Event) => { if (ev.target instanceof Element && ev.target.closest(c.s)) this.trackFor(c.e, c.g); };
+          const h = (ev: Event) => { const matched = ev.target instanceof Element && !!ev.target.closest(c.s); this.#dbg('Click goal check:', c.e, '| selector:', c.s, '| matched:', matched); if (matched) this.trackFor(c.e, c.g); };
           D!.addEventListener('click', h); this.#cl.push(() => D!.removeEventListener('click', h));
         }
       }
@@ -468,7 +487,9 @@ export class GrowthRoadmaps {
         for (const eg of engagementGoals) {
           const k = eg.e + '::' + eg.g;
           if (this.#fg.has(k)) continue;
-          if (urlMatch(url, eg.matchType, eg.value)) { this.#fg.add(k); this.trackFor(eg.e, eg.g); }
+          const matched = urlMatch(url, eg.matchType, eg.value);
+          this.#dbg('Engagement goal check:', eg.e, '| pattern:', eg.value, '| type:', eg.matchType, '| matched:', matched);
+          if (matched) { this.#fg.add(k); this.trackFor(eg.e, eg.g); }
         }
       };
       D.addEventListener('mousedown', h);
@@ -482,7 +503,9 @@ export class GrowthRoadmaps {
         for (const fg of formGoals) {
           const k = fg.e + '::' + fg.g;
           if (this.#fg.has(k)) continue;
-          if (!fg.value || urlMatch(action, fg.matchType, fg.value)) { this.#fg.add(k); this.trackFor(fg.e, fg.g); }
+          const matched = !fg.value || urlMatch(action, fg.matchType, fg.value);
+          this.#dbg('Form goal check:', fg.e, '| action:', action, '| pattern:', fg.value, '| matched:', matched);
+          if (matched) { this.#fg.add(k); this.trackFor(fg.e, fg.g); }
         }
       };
       D.addEventListener('submit', h);
@@ -495,23 +518,27 @@ export class GrowthRoadmaps {
     const u = this.#uid();
     if (!u) return fb;
     const e = this.#e.find(x => x.name === name && x.status === 'running');
-    if (!e?.variants?.length) return fb;
-    if (!passesRules(e.url_rules)) return fb;
-    if (e.targeting_rules?.length && !e.targeting_rules.every(r => evalRule(r, this.#pk(), this.#c.customAttributes))) return fb;
+    if (!e?.variants?.length) { this.#dbg('getVariant: experiment not found or no variants:', name); return fb; }
+    if (!passesRules(e.url_rules)) { this.#dbg('getVariant: URL rules not matched for', name); return fb; }
+    if (e.targeting_rules?.length && !e.targeting_rules.every(r => evalRule(r, this.#pk(), this.#c.customAttributes))) { this.#dbg('getVariant: targeting rules not matched for', name); return fb; }
     const pct = e.traffic_percentage ?? 100;
     const ex = pct < 100 && fnv1a(e.id + '::traffic::' + u) % 100 >= pct;
     let v = this.#a.get(e.id);
     if (!v) {
       v = ex ? (e.variants.find(x => x.is_control) || e.variants.find(x => x.name.toLowerCase() === 'control') || e.variants[0]) : assignVariant(e.id, u, e.variants);
       this.#a.set(e.id, v);
+      this.#dbg('getVariant: assigned', name, '→', v.name, ex ? '(traffic excluded)' : '');
+    } else {
+      this.#dbg('getVariant: cached', name, '→', v.name);
     }
     if (!this.#seen.has(e.id)) {
       this.#seen.add(e.id);
       this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined));
+      this.#dbg('Exposure event sent:', name, '→', v.name);
     }
     if (ex) return v.name;
     if (e.ga && !this.#gf.has(e.id)) {
-      try { ensureGtag(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; W!.gtag('event', 'ab_assignment', { send_to: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name }); this.#gf.add(e.id); } catch {}
+      try { ensureGtag(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; W!.gtag('event', 'ab_assignment', { send_to: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name }); this.#gf.add(e.id); this.#dbg('GA4 event sent:', name, { dimension: e.ga.dimension_name, label: gaLabel, measurementId: e.ga.measurement_id }); } catch {}
     }
     if (this.#ht) this.#ht.setVariantId(v.id);
     if (this.#ft) this.#ft.setVariantId(v.id);
@@ -524,11 +551,14 @@ export class GrowthRoadmaps {
     if (this.#pv) return;
     const u = this.#uid();
     if (!u) return;
+    this.#dbg('track() called:', goal, '— assignments:', this.#a.size);
     for (const [eid, v] of this.#a) {
       const e = this.#e.find(x => x.id === eid);
       if (!e) continue;
+      this.#dbg('Conversion sent (track):', e.name, '→', v.name, 'goal:', goal);
       this.#pushEvent(mkConv(e.id, v.id, u, this.#c.sessionId, goal, o?.value, o?.metadata));
     }
+    if (this.#a.size === 0) this.#dbg('track() WARNING: no assignments found — conversion not recorded');
   }
 
   trackFor(en: string, gn: string, o?: { value?: number }): void {
@@ -537,14 +567,17 @@ export class GrowthRoadmaps {
     if (!u) return;
     const e = this.#e.find(x => x.name === en);
     const v = e && this.#a.get(e.id);
-    if (!e || !v) return;
+    if (!e || !v) { this.#dbg('trackFor() SKIPPED:', en, 'goal:', gn, '— no assignment found', e ? '(experiment exists but no variant assigned)' : '(experiment not found)'); return; }
+    this.#dbg('Conversion sent (trackFor):', en, '→', v.name, 'goal:', gn);
     this.#pushEvent(mkConv(e.id, v.id, u, this.#c.sessionId, gn, o?.value));
   }
 
   #urlGoal(en: string, gn: string, g: Goal): void {
     const k = en + '::' + gn;
     if (this.#fg.has(k) || !g.value) return;
-    if (urlMatch(W!.location.href, g.url_match_type || 'contains', g.value)) { this.#fg.add(k); this.trackFor(en, gn); }
+    const matched = urlMatch(W!.location.href, g.url_match_type || 'contains', g.value);
+    this.#dbg('URL goal check:', en, '| pattern:', g.value, '| type:', g.url_match_type || 'contains', '| url:', W!.location.href, '| matched:', matched);
+    if (matched) { this.#fg.add(k); this.trackFor(en, gn); }
   }
 
   #allUrlGoals(): void {
@@ -557,22 +590,26 @@ export class GrowthRoadmaps {
     let applied = false;
     for (const e of this.#e) {
       if (e.status !== 'running' || e.mode !== 'client' || !e.variants?.length) continue;
-      if (!passesRules(e.url_rules)) continue;
-      if (e.targeting_rules?.length && !e.targeting_rules.every(r => evalRule(r, this.#pk(), this.#c.customAttributes))) continue;
+      if (!passesRules(e.url_rules)) { this.#dbg('applyClient: URL rules not matched for', e.name); continue; }
+      if (e.targeting_rules?.length && !e.targeting_rules.every(r => evalRule(r, this.#pk(), this.#c.customAttributes))) { this.#dbg('applyClient: targeting rules not matched for', e.name); continue; }
       const pct = e.traffic_percentage ?? 100;
       const ex = pct < 100 && fnv1a(e.id + '::traffic::' + u) % 100 >= pct;
       let v = this.#a.get(e.id);
       if (!v) {
         v = ex ? (e.variants.find(x => x.is_control) || e.variants.find(x => x.name.toLowerCase() === 'control') || e.variants[0]) : assignVariant(e.id, u, e.variants);
         this.#a.set(e.id, v);
+        this.#dbg('applyClient: assigned', e.name, '→', v.name, ex ? '(traffic excluded)' : '');
+      } else {
+        this.#dbg('applyClient: already assigned', e.name, '→', v.name);
       }
       if (!this.#seen.has(e.id)) {
         this.#seen.add(e.id);
         this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined));
+        this.#dbg('Exposure event sent:', e.name, '→', v.name);
       }
       if (!ex) {
         if (e.ga && !this.#gf.has(e.id)) {
-          try { ensureGtag(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; W!.gtag('event', 'ab_assignment', { send_to: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name }); this.#gf.add(e.id); } catch {}
+          try { ensureGtag(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; W!.gtag('event', 'ab_assignment', { send_to: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name }); this.#gf.add(e.id); this.#dbg('GA4 event sent:', e.name, { dimension: e.ga.dimension_name, label: gaLabel, measurementId: e.ga.measurement_id }); } catch {}
         }
         if (!this.#ran.has(v.id)) { this.#ran.add(v.id); addCss(v, e.id, this.#sm); loadExternalJs(v).then(function() { runJs(v); }); }
         applied = true;

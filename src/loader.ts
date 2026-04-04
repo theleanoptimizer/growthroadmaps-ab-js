@@ -101,12 +101,14 @@
           if (a && a.external_js && a.external_js.length) {
             for (var m = 0; m < a.external_js.length; m++) {
               if (!D.querySelector('script[data-ab-ext-js="' + a.variantId + '"][src="' + a.external_js[m] + '"]')) {
-                var ejs = D.createElement('script');
-                ejs.src = a.external_js[m];
-                ejs.setAttribute('data-ab-ext-js', a.variantId);
-                ejs.onload = function() { this.setAttribute('data-ab-loaded', '1'); };
-                ejs.onerror = function() { this.setAttribute('data-ab-loaded', '1'); };
-                D.head.appendChild(ejs);
+                (function(src: string, vid: string) {
+                  var ejs = D.createElement('script');
+                  ejs.src = src;
+                  ejs.setAttribute('data-ab-ext-js', vid);
+                  ejs.onload = function() { ejs.setAttribute('data-ab-loaded', '1'); };
+                  ejs.onerror = function() { ejs.setAttribute('data-ab-loaded', '1'); };
+                  D.head.appendChild(ejs);
+                })(a.external_js[m], a.variantId);
               }
             }
           }

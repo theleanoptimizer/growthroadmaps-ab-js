@@ -5,10 +5,12 @@ export class EventBatcher {
   #t: ReturnType<typeof setInterval> | null = null;
   #h: string;
   #k: string;
+  #debug: boolean;
 
-  constructor(host: string, key: string) {
+  constructor(host: string, key: string, debug = false) {
     this.#h = host;
     this.#k = key;
+    this.#debug = debug;
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', () => { if (document.hidden) this.#beacon(); });
     }
@@ -25,11 +27,13 @@ export class EventBatcher {
   async #flush(): Promise<void> {
     if (!this.#q.length) return;
     const evts = this.#q.splice(0);
+    if (this.#debug) console.log('[GR Debug] Flushing', evts.length, 'events', evts.map(e => e.type));
     const url = this.#h + '/api/ab/events/batch';
     const body = JSON.stringify({ events: evts });
     try {
       const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this.#k }, body });
-      if (!r.ok) throw 0;
+      if (!r.ok) { if (this.#debug) console.log('[GR Debug] Batch flush failed:', r.status); throw 0; }
+      if (this.#debug) console.log('[GR Debug] Batch flush success:', evts.length, 'events sent');
     } catch { setTimeout(() => this.#retry(url, body), 5000); }
   }
 
