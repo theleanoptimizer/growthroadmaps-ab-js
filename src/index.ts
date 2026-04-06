@@ -251,15 +251,8 @@ function runJs(v: Variant): void {
   if (!v.js) return;
   try {
     var wrapped = '(function(){try{' + v.js + '\n}catch(e){console.error("[GR] JS error ' + v.name.replace(/["\\]/g, '') + ':",e)}})();';
-    var blob = new Blob([wrapped], { type: 'text/javascript' });
-    var url = URL.createObjectURL(blob);
     var sc = D!.createElement('script');
-    sc.src = url;
-    sc.onload = function() { URL.revokeObjectURL(url); };
-    sc.onerror = function() {
-      URL.revokeObjectURL(url);
-      console.error('[GR] JS error ' + v.name + ': failed to load variant script');
-    };
+    sc.textContent = wrapped;
     D!.head.appendChild(sc);
   } catch (e) { console.error('[GR] JS error ' + v.name + ':', e); }
 }
