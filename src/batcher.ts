@@ -14,6 +14,9 @@ export class EventBatcher {
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', () => { if (document.hidden) this.#beacon(); });
     }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pagehide', () => { this.#beacon(); });
+    }
   }
 
   start(): void { if (!this.#t) this.#t = setInterval(() => { if (this.#q.length) this.#flush(); }, 2000); }
@@ -48,6 +51,8 @@ export class EventBatcher {
     if (!this.#q.length) return;
     try { navigator.sendBeacon(this.#h + '/api/ab/events/batch', new Blob([JSON.stringify({ events: this.#q.splice(0), clientKey: this.#k })], { type: 'application/json' })); } catch {}
   }
+
+  flushBeacon(): void { this.#beacon(); }
 
   destroy(): void {
     if (this.#t) { clearInterval(this.#t); this.#t = null; }

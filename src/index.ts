@@ -466,12 +466,12 @@ export class GrowthRoadmaps {
     }
     if (cl.length) {
       if (cl.length >= 3) {
-        const h = (ev: Event) => { const t = ev.target; if (!(t instanceof Element)) return; for (const c of cl) { try { const matched = !!t.closest(c.s); this.#dbg('Click goal check:', c.e, '| selector:', c.s, '| matched:', matched); if (matched) this.trackFor(c.e, c.g); } catch {} } };
+        const h = (ev: Event) => { const t = ev.target; if (!(t instanceof Element)) return; let any = false; for (const c of cl) { try { const matched = !!t.closest(c.s); this.#dbg('Click goal check:', c.e, '| selector:', c.s, '| matched:', matched); if (matched) { this.trackFor(c.e, c.g); any = true; } } catch {} } if (any) this.#b.flushBeacon(); };
         D!.addEventListener('click', h);
         this.#cl.push(() => D!.removeEventListener('click', h));
       } else {
         for (const c of cl) {
-          const h = (ev: Event) => { const matched = ev.target instanceof Element && !!ev.target.closest(c.s); this.#dbg('Click goal check:', c.e, '| selector:', c.s, '| matched:', matched); if (matched) this.trackFor(c.e, c.g); };
+          const h = (ev: Event) => { const matched = ev.target instanceof Element && !!ev.target.closest(c.s); this.#dbg('Click goal check:', c.e, '| selector:', c.s, '| matched:', matched); if (matched) { this.trackFor(c.e, c.g); this.#b.flushBeacon(); } };
           D!.addEventListener('click', h); this.#cl.push(() => D!.removeEventListener('click', h));
         }
       }
@@ -505,7 +505,7 @@ export class GrowthRoadmaps {
           if (this.#fg.has(k)) continue;
           const matched = !fg.value || urlMatch(action, fg.matchType, fg.value);
           this.#dbg('Form goal check:', fg.e, '| action:', action, '| pattern:', fg.value, '| matched:', matched);
-          if (matched) { this.#fg.add(k); this.trackFor(fg.e, fg.g); }
+          if (matched) { this.#fg.add(k); this.trackFor(fg.e, fg.g); this.#b.flushBeacon(); }
         }
       };
       D.addEventListener('submit', h);
