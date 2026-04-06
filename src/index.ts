@@ -15,6 +15,7 @@ import { EventBatcher } from './batcher';
 import { getAntiFlickerSnippet, revealPage } from './anti-flicker';
 import type { HeatmapTracker } from './heatmap';
 import type { FormTracker } from './form-tracker';
+import { renderPreviewPanel, getStoredSelections, applyPanelVariant } from './preview-panel';
 import type { SurveyManager } from './survey';
 
 interface LazyModule<T> {
@@ -280,6 +281,7 @@ export class GrowthRoadmaps {
   #origSubmit: (() => void) | null = null;
   #gf = new Set<string>();
   #pv = false;
+  #pvExps: Array<{ id: string; name: string; variants: Variant[] }> = [];
   #lu: string = W ? W.location.href : '';
   #rc: (() => void) | null = null;
   #sm = new Map<string, HTMLStyleElement>();
@@ -334,6 +336,13 @@ export class GrowthRoadmaps {
 
   #pk(): string { return this.#c.projectKey || ''; }
   #uid(): string | undefined { return this.#c.userId || this.#c.sessionId; }
+  #isPanelSession(): boolean { try { return !!sessionStorage.getItem('_ab_panel_key') && sessionStorage.getItem('_ab_panel_pk') === this.#pk(); } catch { return false; } }
+  #getPanelKey(): string | null { try { return sessionStorage.getItem('_ab_panel_pk') === this.#pk() ? sessionStorage.getItem('_ab_panel_key') : null; } catch { return null; } }
+  #clearPanelAssets(): void {
+    if (!D) return;
+    D.querySelectorAll('style[data-ab-css], style[data-ab-panel-css], link[data-ab-ext-css], link[data-ab-panel-css], script[data-ab-ext-js], script[data-ab-panel-js]').forEach(el => el.remove());
+    this.#sm.clear();
+  }
 
   #adoptLoaderStyles(): void {
     if (!D || !W?.__gr_loader_ran || this.#pv) return;
@@ -362,8 +371,48 @@ export class GrowthRoadmaps {
   async init(): Promise<void> {
     try {
       if (W) {
-        const t = new URLSearchParams(W.location.search).get('_ab_preview');
-        if (t) {
+        const sp = new URLSearchParams(W.location.search);
+        const t = sp.get('_ab_preview');
+
+        if (t === 'panel' || this.#isPanelSession()) {
+          const panelKey = sp.get('key') || this.#getPanelKey();
+          if (panelKey) {
+            try {
+              const pk = this.#pk();
+              if (t === 'panel') {
+                try { sessionStorage.setItem('_ab_panel_key', panelKey); sessionStorage.setItem('_ab_panel_pk', pk); } catch {}
+              }
+              const r = await fetch(this.#c.apiHost + '/api/ab/preview/panel?pk=' + encodeURIComponent(pk) + '&key=' + encodeURIComponent(panelKey));
+              if (r.ok) {
+                const panelConfig = await r.json();
+                this.#pv = true;
+                this.#pvExps = panelConfig.experiments.map((exp: { id: string; name: string; variants: Variant[] }) => ({ id: exp.id, name: exp.name, variants: exp.variants }));
+                this.#clearPanelAssets();
+                const selections = getStoredSelections();
+                for (const exp of panelConfig.experiments) {
+                  if (!passesRules(exp.url_rules)) continue;
+                  if (exp.targeting_rules?.length && !exp.targeting_rules.every((tr: {id?:string;attribute:string;operator:string;value:string}) => evalRule(tr as TargetingRule, pk, this.#c.customAttributes))) continue;
+                  const selectedId = selections[exp.id] || (exp.variants[0]?.id || '');
+                  if (selectedId) {
+                    applyPanelVariant(exp, selectedId);
+                  }
+                }
+                revealPage();
+                if (D && D.readyState === 'complete') {
+                  renderPreviewPanel(panelConfig);
+                } else if (W) {
+                  W.addEventListener('load', () => renderPreviewPanel(panelConfig));
+                }
+                console.info('[GR] Preview panel mode active — tracking disabled');
+                return;
+              } else if (r.status === 403) {
+                try { sessionStorage.removeItem('_ab_panel_key'); sessionStorage.removeItem('_ab_panel_pk'); } catch {}
+              }
+            } catch {}
+          }
+        }
+
+        if (t && t !== 'panel') {
           try {
             const r = await fetch(this.#c.apiHost + '/api/ab/preview/' + encodeURIComponent(t));
             if (r.ok) {
@@ -400,7 +449,7 @@ export class GrowthRoadmaps {
       if (this.#p) this.#dbg('Project:', this.#p.domain || this.#p.id);
       this.#adoptLoaderStyles();
       revealPage();
-      if (this.#consent) this.#b.start();
+      if (this.#consent && !this.#pv) this.#b.start();
       if (!this.#pv) {
         const restored = loadAssignments(this.#pk(), this.#e);
         for (const [eid, v] of restored) {
@@ -412,7 +461,7 @@ export class GrowthRoadmaps {
         }
         this.#goals(); this.#route(); this.#applyClientExperiments();
       }
-      if (this.#c.heatmaps && this.#p?.heatmaps_enabled !== false) {
+      if (!this.#pv && this.#c.heatmaps && this.#p?.heatmaps_enabled !== false) {
         const hasAllPages = this.#p?.heatmap_all_pages_enabled === true;
         const hasAllForms = this.#p?.form_analytics_all_forms_enabled === true;
         const ruleSets = this.#hc.map(c => c.url_rules || []);
@@ -430,7 +479,7 @@ export class GrowthRoadmaps {
           this.#initFormTracker(formConfigs);
         }
       }
-      if (this.#c.surveys && this.#p?.surveys_enabled !== false) {
+      if (!this.#pv && this.#c.surveys && this.#p?.surveys_enabled !== false) {
         this.#initSurveys();
       }
     }
@@ -551,7 +600,19 @@ export class GrowthRoadmaps {
   }
 
   getVariant(name: string, fb: string): string {
-    if (this.#pv) return fb;
+    if (this.#pv) {
+      const selections = getStoredSelections();
+      const pvExp = this.#pvExps.find(x => x.name === name);
+      if (pvExp) {
+        const selectedId = selections[pvExp.id];
+        if (selectedId) {
+          const v = pvExp.variants.find(x => x.id === selectedId);
+          if (v) return v.name;
+        }
+        if (pvExp.variants.length > 0) return pvExp.variants[0].name;
+      }
+      return fb;
+    }
     const u = this.#uid();
     if (!u) return fb;
     const e = this.#e.find(x => x.name === name && x.status === 'running');
