@@ -650,13 +650,17 @@ export class GrowthRoadmaps {
     const u = this.#uid();
     if (!u) return;
     this.#dbg('track() called:', goal, '— assignments:', this.#a.size);
+    let sent = 0;
     for (const [eid, v] of this.#a) {
       const e = this.#e.find(x => x.id === eid);
       if (!e) continue;
+      const hasGoal = e.goals?.some(g => g.goal_type === 'custom' && (g.label === goal || g.value === goal));
+      if (!hasGoal) { this.#dbg('track() SKIPPED:', e.name, '— no matching custom goal for', goal); continue; }
       this.#dbg('Conversion sent (track):', e.name, '→', v.name, 'goal:', goal);
       this.#pushEvent(mkConv(e.id, v.id, u, this.#c.sessionId, goal, o?.value, o?.metadata));
+      sent++;
     }
-    if (this.#a.size === 0) this.#dbg('track() WARNING: no assignments found — conversion not recorded');
+    if (sent === 0) this.#dbg('track() WARNING: no matching experiments found for goal', goal);
   }
 
   trackFor(en: string, gn: string, o?: { value?: number }): void {

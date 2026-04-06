@@ -22,6 +22,7 @@ export interface Goal {
   goal_type: 'url_match' | 'click' | 'custom' | 'engagement' | 'form_submit';
   value?: string;
   url_match_type?: string;
+  label?: string;
 }
 
 export interface TargetingRule {
