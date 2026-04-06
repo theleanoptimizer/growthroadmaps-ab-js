@@ -313,11 +313,28 @@ export function renderPreviewPanel(config: PanelConfig): void {
     const headerTitle = document.createElement('span');
     headerTitle.textContent = 'A/B Preview (' + experiments.length + ' experiment' + (experiments.length !== 1 ? 's' : '') + ')';
     header.appendChild(headerTitle);
+    const headerBtns = document.createElement('div');
+    headerBtns.style.cssText = 'display:flex;align-items:center;gap:4px;';
     const minBtn = document.createElement('button');
     minBtn.title = 'Minimize';
     minBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>';
     minBtn.onclick = () => { collapsed = true; try { sessionStorage.setItem('_ab_panel_collapsed', '1'); } catch {} render(); };
-    header.appendChild(minBtn);
+    headerBtns.appendChild(minBtn);
+    const closeBtn = document.createElement('button');
+    closeBtn.title = 'Exit Preview';
+    closeBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg>';
+    closeBtn.onclick = () => {
+      try {
+        const variantsKey = getPanelStorageKey();
+        sessionStorage.removeItem(variantsKey);
+        sessionStorage.removeItem('_ab_panel_key');
+        sessionStorage.removeItem('_ab_panel_pk');
+        sessionStorage.removeItem('_ab_panel_collapsed');
+      } catch {}
+      window.location.reload();
+    };
+    headerBtns.appendChild(closeBtn);
+    header.appendChild(headerBtns);
     panel.appendChild(header);
 
     const body = document.createElement('div');
