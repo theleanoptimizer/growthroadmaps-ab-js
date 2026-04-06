@@ -1,5 +1,12 @@
 import type { ExperimentConfig, Variant, UrlRule } from './types';
 
+interface PanelGoal {
+  id: string;
+  goal_type: string;
+  value: string | null;
+  url_match_type: string | null;
+}
+
 interface PanelExperiment {
   id: string;
   name: string;
@@ -8,11 +15,18 @@ interface PanelExperiment {
   variants: Variant[];
   url_rules: UrlRule[];
   targeting_rules: Array<{ id: string; attribute: string; operator: string; value: string }>;
+  goals?: PanelGoal[];
 }
 
 interface PanelConfig {
   experiments: PanelExperiment[];
   domain: string;
+}
+
+interface DebugLogEntry {
+  time: string;
+  type: 'match' | 'skip' | 'goal-match' | 'goal-miss' | 'info';
+  message: string;
 }
 
 function getPanelStorageKey(): string {
@@ -119,6 +133,11 @@ function passesTargetingRules(rules: Array<{ attribute: string; operator: string
   return rules.every(evalTargetingRule);
 }
 
+function fmtTime(): string {
+  const d = new Date();
+  return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
 export function getStoredSelections(): Record<string, string> {
   try {
     const raw = sessionStorage.getItem(getPanelStorageKey());
@@ -215,6 +234,133 @@ export function renderPreviewPanel(config: PanelConfig): void {
   let collapsed = false;
   try { collapsed = sessionStorage.getItem('_ab_panel_collapsed') === '1'; } catch {}
 
+  let debugOn = false;
+  try { debugOn = sessionStorage.getItem('_ab_panel_debug') === '1'; } catch {}
+
+  const debugLogs: DebugLogEntry[] = [];
+  let debugCleanups: Array<() => void> = [];
+  const firedGoalKeys = new Set<string>();
+
+  let renderScheduled = false;
+  function addDebugLog(type: DebugLogEntry['type'], message: string) {
+    const entry: DebugLogEntry = { time: fmtTime(), type, message };
+    debugLogs.push(entry);
+    console.log('[GR Debug] Preview: ' + message);
+    if (!renderScheduled) {
+      renderScheduled = true;
+      queueMicrotask(() => { renderScheduled = false; render(); });
+    }
+  }
+
+  function setupDryRunGoals() {
+    teardownDryRunGoals();
+    firedGoalKeys.clear();
+
+    for (const exp of experiments) {
+      const selectedVariant = exp.variants.find(v => v.id === exp.selectedVariantId);
+      const variantLabel = selectedVariant ? selectedVariant.name : 'unknown';
+
+      if (exp.matchesPage) {
+        addDebugLog('match', exp.name + ' matched this page → ' + variantLabel);
+      } else {
+        const reason = !exp.matchesUrl ? 'URL rules not matched' : 'targeting rules not matched';
+        addDebugLog('skip', exp.name + ' skipped (' + reason + ')');
+      }
+
+      if (!exp.goals?.length || !exp.matchesPage) continue;
+
+      for (const goal of exp.goals) {
+        if (goal.goal_type === 'url_match' && goal.value) {
+          const matched = urlMatch(window.location.href, goal.url_match_type || 'contains', goal.value);
+          if (matched) {
+            const k = exp.id + '::url::' + goal.id;
+            if (!firedGoalKeys.has(k)) {
+              firedGoalKeys.add(k);
+              addDebugLog('goal-match', 'URL goal would convert for ' + exp.name + ' → ' + variantLabel + ' (pattern: ' + goal.value + ')');
+            }
+          } else {
+            addDebugLog('goal-miss', 'URL goal not matched for ' + exp.name + ' (pattern: ' + goal.value + ', current: ' + window.location.href + ')');
+          }
+        }
+
+        if (goal.goal_type === 'click' && goal.value && document) {
+          const selector = goal.value;
+          const handler = (ev: Event) => {
+            const t = ev.target;
+            if (!(t instanceof Element)) return;
+            const k = exp.id + '::click::' + goal.id;
+            if (firedGoalKeys.has(k)) return;
+            try {
+              if (t.closest(selector)) {
+                firedGoalKeys.add(k);
+                addDebugLog('goal-match', 'click goal would convert for ' + exp.name + ' → ' + variantLabel + ' (selector: ' + selector + ')');
+              } else {
+                addDebugLog('goal-miss', 'click goal not matched for ' + exp.name + ' (selector: ' + selector + ', clicked: ' + t.tagName.toLowerCase() + ')');
+              }
+            } catch {}
+          };
+          document.addEventListener('click', handler);
+          debugCleanups.push(() => document.removeEventListener('click', handler));
+        }
+
+        if (goal.goal_type === 'form_submit') {
+          const isSelector = goal.url_match_type === 'selector';
+          const handler = (ev: Event) => {
+            const form = ev.target;
+            if (!(form instanceof HTMLFormElement)) return;
+            const k = exp.id + '::form::' + goal.id;
+            if (firedGoalKeys.has(k)) return;
+            let matched = false;
+            if (isSelector && goal.value) {
+              try { matched = form.matches(goal.value) || !!form.closest(goal.value); } catch {}
+            } else {
+              const action = form.action || window.location.href;
+              matched = !goal.value || urlMatch(action, goal.url_match_type || 'contains', goal.value);
+            }
+            if (matched) {
+              firedGoalKeys.add(k);
+              addDebugLog('goal-match', 'form goal would convert for ' + exp.name + ' → ' + variantLabel + ' (' + (isSelector ? 'selector' : 'action URL') + ': ' + (goal.value || '*') + ')');
+            } else {
+              addDebugLog('goal-miss', 'form goal not matched for ' + exp.name + ' (' + (isSelector ? 'selector' : 'action URL') + ': ' + (goal.value || '*') + ')');
+            }
+          };
+          document.addEventListener('submit', handler);
+          debugCleanups.push(() => document.removeEventListener('submit', handler));
+        }
+
+        if (goal.goal_type === 'engagement' && goal.value) {
+          const engagementTags = new Set(['A', 'BUTTON', 'INPUT', 'TEXTAREA', 'SELECT', 'LABEL', 'IMG']);
+          const handler = (ev: Event) => {
+            const t = ev.target;
+            if (!(t instanceof Element)) return;
+            const el = engagementTags.has(t.tagName) ? t : t.closest('a,button,input,textarea,select,label,img');
+            if (!el) return;
+            const k = exp.id + '::engagement::' + goal.id;
+            if (firedGoalKeys.has(k)) return;
+            const matched = urlMatch(window.location.href, goal.url_match_type || 'contains', goal.value!);
+            if (matched) {
+              firedGoalKeys.add(k);
+              addDebugLog('goal-match', 'engagement goal would convert for ' + exp.name + ' → ' + variantLabel + ' (pattern: ' + goal.value + ')');
+            } else {
+              addDebugLog('goal-miss', 'engagement goal not matched for ' + exp.name + ' (pattern: ' + goal.value + ', current: ' + window.location.href + ')');
+            }
+          };
+          document.addEventListener('mousedown', handler);
+          debugCleanups.push(() => document.removeEventListener('mousedown', handler));
+        }
+      }
+    }
+  }
+
+  function teardownDryRunGoals() {
+    for (const cleanup of debugCleanups) cleanup();
+    debugCleanups = [];
+  }
+
+  if (debugOn) {
+    setupDryRunGoals();
+  }
+
   function render() {
     shadow.innerHTML = '';
 
@@ -235,7 +381,7 @@ export function renderPreviewPanel(config: PanelConfig): void {
         border-radius: 50%; display: flex; align-items: center; justify-content: center;
       }
       .panel {
-        width: 360px; max-height: 480px; background: #fff; border-radius: 12px;
+        width: 360px; max-height: 520px; background: #fff; border-radius: 12px;
         box-shadow: 0 4px 24px rgba(0,0,0,0.15); overflow: hidden; display: flex; flex-direction: column;
       }
       .panel-header {
@@ -281,8 +427,41 @@ export function renderPreviewPanel(config: PanelConfig): void {
       }
       .panel-footer {
         padding: 8px 16px; background: #f8fafc; border-top: 1px solid #f1f5f9;
-        font-size: 10px; color: #94a3b8; text-align: center;
+        font-size: 10px; color: #94a3b8; display: flex; align-items: center;
+        justify-content: space-between;
       }
+      .debug-toggle {
+        display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px;
+        border-radius: 4px; border: 1px solid #e2e8f0; background: #fff;
+        color: #64748b; font-size: 10px; cursor: pointer; font-weight: 500;
+        transition: all 0.15s;
+      }
+      .debug-toggle:hover { border-color: #6366f1; color: #6366f1; }
+      .debug-toggle.active { background: #6366f1; color: #fff; border-color: #6366f1; }
+      .debug-toggle svg { width: 12px; height: 12px; }
+      .debug-section {
+        border-top: 1px solid #e2e8f0; background: #f8fafc;
+        max-height: 180px; overflow-y: auto;
+      }
+      .debug-section-header {
+        padding: 6px 16px; font-size: 10px; font-weight: 600; color: #64748b;
+        text-transform: uppercase; letter-spacing: 0.5px; background: #f1f5f9;
+        position: sticky; top: 0; z-index: 1;
+      }
+      .debug-entry {
+        padding: 4px 16px; font-size: 11px; color: #475569; border-bottom: 1px solid #f1f5f9;
+        display: flex; gap: 6px; align-items: flex-start;
+      }
+      .debug-entry:last-child { border-bottom: none; }
+      .debug-time { color: #94a3b8; font-size: 10px; white-space: nowrap; font-family: monospace; }
+      .debug-icon { flex-shrink: 0; width: 14px; height: 14px; display: flex; align-items: center; justify-content: center; font-size: 10px; }
+      .debug-icon.match { color: #16a34a; }
+      .debug-icon.skip { color: #f59e0b; }
+      .debug-icon.goal-match { color: #6366f1; }
+      .debug-icon.goal-miss { color: #94a3b8; }
+      .debug-icon.info { color: #3b82f6; }
+      .debug-msg { flex: 1; word-break: break-word; line-height: 1.3; }
+      .debug-empty { padding: 12px 16px; text-align: center; color: #94a3b8; font-size: 11px; }
     `;
     shadow.appendChild(style);
 
@@ -324,12 +503,14 @@ export function renderPreviewPanel(config: PanelConfig): void {
     closeBtn.title = 'Exit Preview';
     closeBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg>';
     closeBtn.onclick = () => {
+      teardownDryRunGoals();
       try {
         const variantsKey = getPanelStorageKey();
         sessionStorage.removeItem(variantsKey);
         sessionStorage.removeItem('_ab_panel_key');
         sessionStorage.removeItem('_ab_panel_pk');
         sessionStorage.removeItem('_ab_panel_collapsed');
+        sessionStorage.removeItem('_ab_panel_debug');
       } catch {}
       window.location.reload();
     };
@@ -391,9 +572,73 @@ export function renderPreviewPanel(config: PanelConfig): void {
 
     panel.appendChild(body);
 
+    if (debugOn) {
+      const debugSection = document.createElement('div');
+      debugSection.className = 'debug-section';
+
+      const debugHeader = document.createElement('div');
+      debugHeader.className = 'debug-section-header';
+      debugHeader.textContent = 'Debug Log';
+      debugSection.appendChild(debugHeader);
+
+      if (debugLogs.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'debug-empty';
+        empty.textContent = 'No debug events yet. Interact with the page to see goal evaluations.';
+        debugSection.appendChild(empty);
+      } else {
+        for (const entry of debugLogs) {
+          const row = document.createElement('div');
+          row.className = 'debug-entry';
+
+          const timeSpan = document.createElement('span');
+          timeSpan.className = 'debug-time';
+          timeSpan.textContent = entry.time;
+          row.appendChild(timeSpan);
+
+          const iconSpan = document.createElement('span');
+          iconSpan.className = 'debug-icon ' + entry.type;
+          const iconMap: Record<string, string> = { 'match': '\u2713', 'skip': '\u2014', 'goal-match': '\u25CF', 'goal-miss': '\u25CB', 'info': '\u2139' };
+          iconSpan.textContent = iconMap[entry.type] || '\u2022';
+          row.appendChild(iconSpan);
+
+          const msgSpan = document.createElement('span');
+          msgSpan.className = 'debug-msg';
+          msgSpan.textContent = entry.message;
+          row.appendChild(msgSpan);
+
+          debugSection.appendChild(row);
+        }
+      }
+
+      panel.appendChild(debugSection);
+    }
+
     const footer = document.createElement('div');
     footer.className = 'panel-footer';
-    footer.textContent = 'Preview Mode — tracking disabled';
+
+    const footerText = document.createElement('span');
+    footerText.textContent = 'Preview Mode \u2014 tracking disabled';
+    footer.appendChild(footerText);
+
+    const debugBtn = document.createElement('button');
+    debugBtn.className = 'debug-toggle' + (debugOn ? ' active' : '');
+    debugBtn.title = debugOn ? 'Disable debug mode' : 'Enable debug mode';
+    debugBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/></svg> Debug';
+    debugBtn.onclick = () => {
+      debugOn = !debugOn;
+      try { sessionStorage.setItem('_ab_panel_debug', debugOn ? '1' : '0'); } catch {}
+      if (debugOn) {
+        debugLogs.length = 0;
+        setupDryRunGoals();
+      } else {
+        teardownDryRunGoals();
+        debugLogs.length = 0;
+      }
+      render();
+    };
+    footer.appendChild(debugBtn);
+
     panel.appendChild(footer);
 
     shadow.appendChild(panel);
