@@ -113,6 +113,26 @@
             }
           }
         }
+        var expLabels = [];
+        if (cachedCfg.experiments) {
+          for (var eid2 in assignments) {
+            var ae = assignments[eid2];
+            if (!ae) continue;
+            for (var ei = 0; ei < cachedCfg.experiments.length; ei++) {
+              var ce = cachedCfg.experiments[ei];
+              if (ce.id === eid2 && ce.sequence_number != null) {
+                for (var vi = 0; vi < ce.variants.length; vi++) {
+                  if (ce.variants[vi].id === ae.variantId && ce.variants[vi].index != null) {
+                    expLabels.push("EXP-" + ce.sequence_number + "-" + ce.variants[vi].index);
+                    break;
+                  }
+                }
+                break;
+              }
+            }
+          }
+        }
+        D.cookie = "_ab_exp=" + encodeURIComponent(expLabels.join(",")) + ";path=/;max-age=31536000;SameSite=Lax";
         if (applied) {
           W.__ab_reveal();
         }

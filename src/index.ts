@@ -59,6 +59,18 @@ function sc(id: string): void {
   if (D) D.cookie = `_ab_vid=${encodeURIComponent(id)};path=/;max-age=31536000;SameSite=Lax`;
 }
 
+function syncExpCookie(assignments: Map<string, Variant>, experiments: ExperimentConfig[]): void {
+  if (!D) return;
+  const labels: string[] = [];
+  for (const [eid, v] of assignments) {
+    const e = experiments.find(x => x.id === eid);
+    if (e && e.sequence_number != null && v.index != null) {
+      labels.push(`EXP-${e.sequence_number}-${v.index}`);
+    }
+  }
+  D.cookie = `_ab_exp=${encodeURIComponent(labels.join(','))};path=/;max-age=31536000;SameSite=Lax`;
+}
+
 function vid(skipCookie?: boolean): string {
   if (!skipCookie) {
     const v = gc('_ab_vid');
@@ -86,6 +98,7 @@ function saveAssignments(pk: string, assignments: Map<string, Variant>, experime
     }
     localStorage.setItem('ab_va_' + pk, JSON.stringify(out));
   } catch {}
+  try { syncExpCookie(assignments, experiments); } catch {}
 }
 
 function loadAssignments(pk: string, experiments: ExperimentConfig[]): Map<string, Variant> {
@@ -236,7 +249,19 @@ function loadExternalJs(v: Variant): Promise<void> {
 
 function runJs(v: Variant): void {
   if (!v.js) return;
-  try { new Function(v.js)(); } catch (e) { console.error('[GR] JS error ' + v.name + ':', e); }
+  try {
+    var wrapped = '(function(){try{' + v.js + '\n}catch(e){console.error("[GR] JS error ' + v.name.replace(/["\\]/g, '') + ':",e)}})();';
+    var blob = new Blob([wrapped], { type: 'text/javascript' });
+    var url = URL.createObjectURL(blob);
+    var sc = D!.createElement('script');
+    sc.src = url;
+    sc.onload = function() { URL.revokeObjectURL(url); };
+    sc.onerror = function() {
+      URL.revokeObjectURL(url);
+      console.error('[GR] JS error ' + v.name + ': failed to load variant script');
+    };
+    D!.head.appendChild(sc);
+  } catch (e) { console.error('[GR] JS error ' + v.name + ':', e); }
 }
 
 function goalKey(g: Goal): string { return g.goal_type + (g.value ? ':' + g.value : ''); }
@@ -259,6 +284,7 @@ export class GrowthRoadmaps {
   #ran = new Set<string>();
   #cl: (() => void)[] = [];
   #fg = new Set<string>();
+  #origSubmit: (() => void) | null = null;
   #gf = new Set<string>();
   #pv = false;
   #lu: string = W ? W.location.href : '';
@@ -496,26 +522,38 @@ export class GrowthRoadmaps {
       this.#cl.push(() => D!.removeEventListener('mousedown', h));
     }
     if (formGoals.length && D) {
-      const h = (ev: Event) => {
-        const form = ev.target;
-        if (!(form instanceof HTMLFormElement)) return;
+      const checkForm = (form: HTMLFormElement, source: string) => {
         for (const fg of formGoals) {
           const k = fg.e + '::' + fg.g;
           if (this.#fg.has(k)) continue;
           let matched: boolean;
           if (fg.isSelector) {
             try { matched = !!fg.value && (form.matches(fg.value) || !!form.closest(fg.value)); } catch { matched = false; }
-            this.#dbg('Form goal check (selector):', fg.e, '| selector:', fg.value, '| matched:', matched);
+            this.#dbg(`Form goal check (${source} selector):`, fg.e, '| selector:', fg.value, '| matched:', matched);
           } else {
             const action = form.action || W!.location.href;
             matched = !fg.value || urlMatch(action, fg.matchType, fg.value);
-            this.#dbg('Form goal check (action URL):', fg.e, '| action:', action, '| pattern:', fg.value, '| type:', fg.matchType, '| matched:', matched);
+            this.#dbg(`Form goal check (${source} action URL):`, fg.e, '| action:', action, '| pattern:', fg.value, '| type:', fg.matchType, '| matched:', matched);
           }
           if (matched) { this.#fg.add(k); this.trackFor(fg.e, fg.g); this.#b.flushBeacon(); }
         }
       };
+      const h = (ev: Event) => {
+        const form = ev.target;
+        if (!(form instanceof HTMLFormElement)) return;
+        checkForm(form, 'event');
+      };
       D.addEventListener('submit', h);
       this.#cl.push(() => D!.removeEventListener('submit', h));
+      const orig = HTMLFormElement.prototype.submit;
+      this.#origSubmit = orig;
+      const self = this;
+      HTMLFormElement.prototype.submit = function(this: HTMLFormElement) {
+        self.#dbg('Form goal check (programmatic submit):', this);
+        checkForm(this, 'programmatic submit');
+        return orig.call(this);
+      };
+      this.#cl.push(() => { HTMLFormElement.prototype.submit = orig; self.#origSubmit = null; });
     }
   }
 
@@ -594,6 +632,7 @@ export class GrowthRoadmaps {
     const u = this.#uid();
     if (!u) return;
     let applied = false;
+    let assigned = false;
     for (const e of this.#e) {
       if (e.status !== 'running' || e.mode !== 'client' || !e.variants?.length) continue;
       if (!passesRules(e.url_rules)) { this.#dbg('applyClient: URL rules not matched for', e.name); continue; }
@@ -604,6 +643,7 @@ export class GrowthRoadmaps {
       if (!v) {
         v = ex ? (e.variants.find(x => x.is_control) || e.variants.find(x => x.name.toLowerCase() === 'control') || e.variants[0]) : assignVariant(e.id, u, e.variants);
         this.#a.set(e.id, v);
+        assigned = true;
         this.#dbg('applyClient: assigned', e.name, '→', v.name, ex ? '(traffic excluded)' : '');
       } else {
         this.#dbg('applyClient: already assigned', e.name, '→', v.name);
@@ -621,12 +661,13 @@ export class GrowthRoadmaps {
         applied = true;
       }
     }
-    if (applied) saveAssignments(this.#pk(), this.#a, this.#e);
+    if (applied || assigned) saveAssignments(this.#pk(), this.#a, this.#e);
   }
 
   #reeval(): void {
     const u = this.#uid();
     if (!u) return;
+    let assigned = false;
     for (const e of this.#e) {
       if (e.status !== 'running' || e.mode !== 'client' || !e.variants?.length) continue;
       const ok = passesRules(e.url_rules);
@@ -637,10 +678,11 @@ export class GrowthRoadmaps {
       const pct = e.traffic_percentage ?? 100;
       if (pct < 100 && fnv1a(e.id + '::traffic::' + u) % 100 >= pct) continue;
       let v = this.#a.get(e.id);
-      if (!v) { v = assignVariant(e.id, u, e.variants); this.#a.set(e.id, v); }
+      if (!v) { v = assignVariant(e.id, u, e.variants); this.#a.set(e.id, v); assigned = true; }
       addCss(v, e.id, this.#sm);
       if ((v.js || (v.external_js && v.external_js.length)) && !this.#ran.has(v.id)) { this.#ran.add(v.id); loadExternalJs(v).then(function() { runJs(v); }); }
     }
+    if (assigned) saveAssignments(this.#pk(), this.#a, this.#e);
   }
 
   #onNav(): void {
