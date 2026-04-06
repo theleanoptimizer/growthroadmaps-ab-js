@@ -453,7 +453,7 @@ export class GrowthRoadmaps {
     if (!W) return;
     const cl: { e: string; g: string; s: string }[] = [];
     const engagementGoals: { e: string; g: string; value: string; matchType: string }[] = [];
-    const formGoals: { e: string; g: string; value: string; matchType: string }[] = [];
+    const formGoals: { e: string; g: string; value: string; matchType: string; isSelector: boolean }[] = [];
     for (const e of this.#e) {
       if (e.status !== 'running' || !e.goals) continue;
       for (const g of e.goals) {
@@ -461,7 +461,7 @@ export class GrowthRoadmaps {
         if (g.goal_type === 'click' && g.value && D) cl.push({ e: e.name, g: goalKey(g), s: g.value });
         if (g.goal_type === 'url_match') this.#urlGoal(e.name, goalKey(g), g);
         if (g.goal_type === 'engagement' && g.value) engagementGoals.push({ e: e.name, g: goalKey(g), value: g.value, matchType: g.url_match_type || 'contains' });
-        if (g.goal_type === 'form_submit') formGoals.push({ e: e.name, g: goalKey(g), value: g.value || '', matchType: g.url_match_type || 'contains' });
+        if (g.goal_type === 'form_submit') formGoals.push({ e: e.name, g: goalKey(g), value: g.value || '', matchType: g.url_match_type || 'contains', isSelector: g.url_match_type === 'selector' });
       }
     }
     if (cl.length) {
@@ -499,12 +499,18 @@ export class GrowthRoadmaps {
       const h = (ev: Event) => {
         const form = ev.target;
         if (!(form instanceof HTMLFormElement)) return;
-        const action = form.action || W!.location.href;
         for (const fg of formGoals) {
           const k = fg.e + '::' + fg.g;
           if (this.#fg.has(k)) continue;
-          const matched = !fg.value || urlMatch(action, fg.matchType, fg.value);
-          this.#dbg('Form goal check:', fg.e, '| action:', action, '| pattern:', fg.value, '| matched:', matched);
+          let matched: boolean;
+          if (fg.isSelector) {
+            try { matched = !!fg.value && (form.matches(fg.value) || !!form.closest(fg.value)); } catch { matched = false; }
+            this.#dbg('Form goal check (selector):', fg.e, '| selector:', fg.value, '| matched:', matched);
+          } else {
+            const action = form.action || W!.location.href;
+            matched = !fg.value || urlMatch(action, fg.matchType, fg.value);
+            this.#dbg('Form goal check (action URL):', fg.e, '| action:', action, '| pattern:', fg.value, '| type:', fg.matchType, '| matched:', matched);
+          }
           if (matched) { this.#fg.add(k); this.trackFor(fg.e, fg.g); this.#b.flushBeacon(); }
         }
       };
