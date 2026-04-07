@@ -26,20 +26,17 @@ type HeatmapModule = { HeatmapTracker: typeof HeatmapTracker };
 type FormTrackerModule = { FormTracker: typeof FormTracker };
 type SurveyModule = { SurveyManager: typeof SurveyManager };
 
-type GtagCommand = 'config' | 'event' | 'set' | 'js' | 'consent';
 interface GrowthWindow extends Window {
-  dataLayer: IArguments[];
-  gtag(command: GtagCommand, ...args: unknown[]): void;
+  dataLayer: Record<string, unknown>[];
 }
 
 const W = typeof window !== 'undefined' ? window as unknown as GrowthWindow : undefined;
 const D = typeof document !== 'undefined' ? document : undefined;
 const N = typeof navigator !== 'undefined' ? navigator : undefined;
 
-function ensureGtag(): void {
+function ensureDataLayer(): void {
   if (!W) return;
   W.dataLayer = W.dataLayer || [];
-  if (!W.gtag) { W.gtag = function() { W.dataLayer.push(arguments); }; }
 }
 
 function uuid(): string {
@@ -636,7 +633,7 @@ export class GrowthRoadmaps {
     }
     if (ex) return v.name;
     if (e.ga && !this.#gf.has(e.id)) {
-      try { ensureGtag(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; W!.gtag('event', 'ab_assignment', { send_to: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name }); this.#gf.add(e.id); this.#dbg('GA4 event sent:', name, { dimension: e.ga.dimension_name, label: gaLabel, measurementId: e.ga.measurement_id }); } catch {}
+      try { ensureDataLayer(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; const dlEvent: Record<string, unknown> = { event: 'ab_assignment', measurement_id: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name }; W!.dataLayer.push(dlEvent); this.#gf.add(e.id); this.#dbg('GA4 dataLayer.push:', name, dlEvent); } catch {}
     }
     if (this.#ht) this.#ht.setVariantId(v.id);
     if (this.#ft) this.#ft.setVariantId(v.id);
@@ -713,7 +710,7 @@ export class GrowthRoadmaps {
       }
       if (!ex) {
         if (e.ga && !this.#gf.has(e.id)) {
-          try { ensureGtag(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; W!.gtag('event', 'ab_assignment', { send_to: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name }); this.#gf.add(e.id); this.#dbg('GA4 event sent:', e.name, { dimension: e.ga.dimension_name, label: gaLabel, measurementId: e.ga.measurement_id }); } catch {}
+          try { ensureDataLayer(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; const dlEvent: Record<string, unknown> = { event: 'ab_assignment', measurement_id: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name }; W!.dataLayer.push(dlEvent); this.#gf.add(e.id); this.#dbg('GA4 dataLayer.push:', e.name, dlEvent); } catch {}
         }
         if (!this.#ran.has(v.id)) { this.#ran.add(v.id); addCss(v, e.id, this.#sm); loadExternalJs(v).then(function() { runJs(v); }); }
         applied = true;

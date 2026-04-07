@@ -249,6 +249,6 @@ declare global {
     __gr_loader_cfg?: { pk: string; host: string };
     GrowthRoadmaps?: typeof import('./index').GrowthRoadmaps;
     getAntiFlickerSnippet?: typeof import('./anti-flicker').getAntiFlickerSnippet;
-    gtag?: (...args: any[]) => void;
+    dataLayer?: Record<string, unknown>[];
   }
 }
