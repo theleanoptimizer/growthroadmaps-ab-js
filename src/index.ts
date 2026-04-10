@@ -633,7 +633,7 @@ export class GrowthRoadmaps {
     }
     if (ex) return v.name;
     if (e.ga && !this.#gf.has(e.id)) {
-      try { ensureDataLayer(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; const dlEvent: Record<string, unknown> = { event: 'ab_assignment', measurement_id: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name }; W!.dataLayer.push(dlEvent); W!.dataLayer.push({ event: 'ab_user_properties', user_properties: { [e.ga.dimension_name]: { value: gaLabel } } }); this.#gf.add(e.id); this.#dbg('GA4 dataLayer.push (event + user_properties):', name, dlEvent); } catch {}
+      try { ensureDataLayer(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; const dlEvent: Record<string, unknown> = { event: 'experience_impression', measurement_id: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name }; W!.dataLayer.push(dlEvent); W!.dataLayer.push({ event: 'experience_impression', user_properties: { [e.ga.dimension_name]: { value: gaLabel } } }); this.#gf.add(e.id); this.#dbg('GA4 dataLayer.push (event + user_properties):', name, dlEvent); } catch {}
     }
     if (this.#ht) this.#ht.setVariantId(v.id);
     if (this.#ft) this.#ft.setVariantId(v.id);
@@ -710,7 +710,7 @@ export class GrowthRoadmaps {
       }
       if (!ex) {
         if (e.ga && !this.#gf.has(e.id)) {
-          try { ensureDataLayer(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; const dlEvent: Record<string, unknown> = { event: 'ab_assignment', measurement_id: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name }; W!.dataLayer.push(dlEvent); W!.dataLayer.push({ event: 'ab_user_properties', user_properties: { [e.ga.dimension_name]: { value: gaLabel } } }); this.#gf.add(e.id); this.#dbg('GA4 dataLayer.push (event + user_properties):', e.name, dlEvent); } catch {}
+          try { ensureDataLayer(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; const dlEvent: Record<string, unknown> = { event: 'experience_impression', measurement_id: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name }; W!.dataLayer.push(dlEvent); W!.dataLayer.push({ event: 'experience_impression', user_properties: { [e.ga.dimension_name]: { value: gaLabel } } }); this.#gf.add(e.id); this.#dbg('GA4 dataLayer.push (event + user_properties):', e.name, dlEvent); } catch {}
         }
         if (!this.#ran.has(v.id)) { this.#ran.add(v.id); addCss(v, e.id, this.#sm); loadExternalJs(v).then(function() { runJs(v); }); }
         applied = true;
