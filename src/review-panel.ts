@@ -30,7 +30,7 @@ interface ReviewConfig {
 
 function getApiHost(): string {
   if (typeof window === 'undefined') return '';
-  return (window as Record<string, unknown>)['__GR_API_HOST__'] as string || '';
+  return (window as unknown as Record<string, unknown>)['__GR_API_HOST__'] as string || '';
 }
 
 function getReviewToken(): string | null {
