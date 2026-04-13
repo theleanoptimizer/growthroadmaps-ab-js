@@ -16,6 +16,7 @@ import { getAntiFlickerSnippet, revealPage } from './anti-flicker';
 import type { HeatmapTracker } from './heatmap';
 import type { FormTracker } from './form-tracker';
 import { renderPreviewPanel, getStoredSelections, applyPanelVariant } from './preview-panel';
+import { initReviewMode } from './review-panel';
 import type { SurveyManager } from './survey';
 
 interface LazyModule<T> {
@@ -368,6 +369,15 @@ export class GrowthRoadmaps {
   async init(): Promise<void> {
     try {
       if (W) {
+        // Check for review mode first — takes priority over preview mode
+        const reviewToken = new URLSearchParams(W.location.search).get('_ab_review');
+        if (reviewToken) {
+          await initReviewMode(this.#c.apiHost);
+          revealPage();
+          console.info('[GR] Review mode active — tracking disabled');
+          return;
+        }
+
         const sp = new URLSearchParams(W.location.search);
         const t = sp.get('_ab_preview');
 
