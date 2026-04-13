@@ -129,8 +129,23 @@ async function captureFullPageScreenshot(): Promise<string | null> {
   try {
     const html2canvas = await loadHtml2Canvas();
     if (!html2canvas) return null;
-    const canvas = await html2canvas(document.body, { scale: 0.4, useCORS: true, allowTaint: true, logging: false });
-    return canvas.toDataURL('image/jpeg', 0.6);
+    const sx = window.scrollX || 0;
+    const sy = window.scrollY || 0;
+    const canvas = await html2canvas(document.documentElement, {
+      scale: 0.6,
+      useCORS: true,
+      allowTaint: true,
+      logging: false,
+      x: sx,
+      y: sy,
+      width: window.innerWidth,
+      height: window.innerHeight,
+      scrollX: -sx,
+      scrollY: -sy,
+      windowWidth: window.innerWidth,
+      windowHeight: window.innerHeight,
+    });
+    return canvas.toDataURL('image/jpeg', 0.7);
   } catch {
     return null;
   }
@@ -168,13 +183,15 @@ function renderReviewPanel(initialConfig: ReviewConfig, token: string, apiHost: 
 
   const shadow = host.attachShadow({ mode: 'open' });
 
+  const LS_NAME_KEY = 'gr_reviewer_name';
+
   // Panel state
   let config = initialConfig;
   let collapsed = false;
   let tab: 'feedback' | 'notes' = 'feedback';
   let submitting = false;
   let submitted = false;
-  let name = '';
+  let name = (() => { try { return localStorage.getItem(LS_NAME_KEY) || ''; } catch { return ''; } })();
   let noteText = '';
   let screenshotMode: 'none' | 'page' | 'element' = 'none';
   let captureStatus = '';
@@ -403,7 +420,10 @@ function renderReviewPanel(initialConfig: ReviewConfig, token: string, apiHost: 
         nameInput.type = 'text';
         nameInput.placeholder = 'Reviewer name';
         nameInput.value = name;
-        nameInput.oninput = (e) => { name = (e.target as HTMLInputElement).value; };
+        nameInput.oninput = (e) => {
+          name = (e.target as HTMLInputElement).value;
+          if (name) { try { localStorage.setItem(LS_NAME_KEY, name); } catch { /* ignore */ } }
+        };
         body.appendChild(nameLabel);
         body.appendChild(nameInput);
 
@@ -439,7 +459,7 @@ function renderReviewPanel(initialConfig: ReviewConfig, token: string, apiHost: 
 
         const pageBtn = document.createElement('button');
         pageBtn.className = `screenshot-btn${screenshotMode === 'page' ? ' active' : ''}`;
-        pageBtn.textContent = 'Full page';
+        pageBtn.textContent = 'Visible area';
         pageBtn.onclick = async () => {
           screenshotMode = 'page';
           pendingDataUrl = null;
