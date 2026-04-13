@@ -93,11 +93,42 @@ async function applyReviewVariant(variant: ReviewVariant): Promise<void> {
   }
 }
 
+type Html2CanvasFn = (el: HTMLElement, opts: Record<string, unknown>) => Promise<HTMLCanvasElement>;
+
+function loadHtml2Canvas(): Promise<Html2CanvasFn | null> {
+  const w = window as unknown as Record<string, unknown>;
+  if (typeof w['html2canvas'] === 'function') {
+    return Promise.resolve(w['html2canvas'] as Html2CanvasFn);
+  }
+  return new Promise((resolve) => {
+    if (document.querySelector('script[data-gr-h2c]')) {
+      // Already loading — poll until ready or timeout
+      let attempts = 0;
+      const poll = setInterval(() => {
+        attempts++;
+        if (typeof w['html2canvas'] === 'function') {
+          clearInterval(poll);
+          resolve(w['html2canvas'] as Html2CanvasFn);
+        } else if (attempts > 40) {
+          clearInterval(poll);
+          resolve(null);
+        }
+      }, 100);
+      return;
+    }
+    const script = document.createElement('script');
+    script.setAttribute('data-gr-h2c', '1');
+    script.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+    script.onload = () => resolve(typeof w['html2canvas'] === 'function' ? w['html2canvas'] as Html2CanvasFn : null);
+    script.onerror = () => resolve(null);
+    document.head.appendChild(script);
+  });
+}
+
 async function captureFullPageScreenshot(): Promise<string | null> {
   try {
-    // Dynamic import — fails gracefully if not bundled
-    const mod = await import('html2canvas');
-    const html2canvas = (mod as { default: (el: HTMLElement, opts: Record<string, unknown>) => Promise<HTMLCanvasElement> }).default;
+    const html2canvas = await loadHtml2Canvas();
+    if (!html2canvas) return null;
     const canvas = await html2canvas(document.body, { scale: 0.4, useCORS: true, allowTaint: true, logging: false });
     return canvas.toDataURL('image/jpeg', 0.6);
   } catch {
@@ -107,8 +138,8 @@ async function captureFullPageScreenshot(): Promise<string | null> {
 
 async function captureElementScreenshot(el: HTMLElement): Promise<string | null> {
   try {
-    const mod = await import('html2canvas');
-    const html2canvas = (mod as { default: (el: HTMLElement, opts: Record<string, unknown>) => Promise<HTMLCanvasElement> }).default;
+    const html2canvas = await loadHtml2Canvas();
+    if (!html2canvas) return null;
     const canvas = await html2canvas(el, { scale: 1, useCORS: true, allowTaint: true, logging: false });
     return canvas.toDataURL('image/jpeg', 0.8);
   } catch {
