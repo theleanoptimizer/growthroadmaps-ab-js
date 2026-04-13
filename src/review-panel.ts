@@ -125,41 +125,56 @@ function loadHtml2Canvas(): Promise<Html2CanvasFn | null> {
   });
 }
 
-async function captureFullPageScreenshot(): Promise<string | null> {
+async function withPanelHidden<T>(fn: () => Promise<T>): Promise<T> {
+  const host = document.getElementById('gr-review-panel-host');
+  if (host) host.style.visibility = 'hidden';
+  await new Promise(r => requestAnimationFrame(r));
   try {
-    const html2canvas = await loadHtml2Canvas();
-    if (!html2canvas) return null;
-    const sx = window.scrollX || 0;
-    const sy = window.scrollY || 0;
-    const canvas = await html2canvas(document.documentElement, {
-      scale: 0.6,
-      useCORS: true,
-      allowTaint: true,
-      logging: false,
-      x: sx,
-      y: sy,
-      width: window.innerWidth,
-      height: window.innerHeight,
-      scrollX: -sx,
-      scrollY: -sy,
-      windowWidth: window.innerWidth,
-      windowHeight: window.innerHeight,
-    });
-    return canvas.toDataURL('image/jpeg', 0.7);
-  } catch {
-    return null;
+    return await fn();
+  } finally {
+    if (host) host.style.visibility = '';
   }
 }
 
+async function captureFullPageScreenshot(): Promise<string | null> {
+  return withPanelHidden(async () => {
+    try {
+      const html2canvas = await loadHtml2Canvas();
+      if (!html2canvas) return null;
+      const sx = window.scrollX || 0;
+      const sy = window.scrollY || 0;
+      const canvas = await html2canvas(document.documentElement, {
+        scale: 0.6,
+        useCORS: true,
+        allowTaint: true,
+        logging: false,
+        x: sx,
+        y: sy,
+        width: window.innerWidth,
+        height: window.innerHeight,
+        scrollX: -sx,
+        scrollY: -sy,
+        windowWidth: window.innerWidth,
+        windowHeight: window.innerHeight,
+      });
+      return canvas.toDataURL('image/jpeg', 0.7);
+    } catch {
+      return null;
+    }
+  });
+}
+
 async function captureElementScreenshot(el: HTMLElement): Promise<string | null> {
-  try {
-    const html2canvas = await loadHtml2Canvas();
-    if (!html2canvas) return null;
-    const canvas = await html2canvas(el, { scale: 1, useCORS: true, allowTaint: true, logging: false });
-    return canvas.toDataURL('image/jpeg', 0.8);
-  } catch {
-    return null;
-  }
+  return withPanelHidden(async () => {
+    try {
+      const html2canvas = await loadHtml2Canvas();
+      if (!html2canvas) return null;
+      const canvas = await html2canvas(el, { scale: 1, useCORS: true, allowTaint: true, logging: false });
+      return canvas.toDataURL('image/jpeg', 0.8);
+    } catch {
+      return null;
+    }
+  });
 }
 
 function formatTimeAgo(dateStr: string): string {
