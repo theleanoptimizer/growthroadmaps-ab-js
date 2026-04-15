@@ -323,6 +323,12 @@ export class GrowthRoadmaps {
     const mod = await import('./heatmap') as HeatmapModule & LazyModule<HeatmapModule>;
     const resolved = typeof mod.__lazyLoad === 'function' ? await mod.__lazyLoad() : mod;
     this.#ht = new resolved.HeatmapTracker(this.#b, this.#c.userId || this.#c.sessionId || '', this.#c.sessionId, () => this.#consent, urlRuleSets, trackAllPages);
+    // Backfill variant ID: getVariant() / #applyClientExperiments() may have run before
+    // this async module finished loading, so this.#ht was null when setVariantId was called.
+    if (this.#a.size > 0) {
+      const lastVariant = [...this.#a.values()].pop();
+      if (lastVariant) this.#ht.setVariantId(lastVariant.id);
+    }
   }
 
   async #initFormTracker(formConfigs: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; form_selectors?: string[] }>): Promise<void> {
@@ -723,6 +729,8 @@ export class GrowthRoadmaps {
           try { ensureDataLayer(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; const dlEvent: Record<string, unknown> = { event: 'experience_impression', measurement_id: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name }; W!.dataLayer.push(dlEvent); W!.dataLayer.push({ event: 'experience_impression', user_properties: { [e.ga.dimension_name]: { value: gaLabel } } }); this.#gf.add(e.id); this.#dbg('GA4 dataLayer.push (event + user_properties):', e.name, dlEvent); } catch {}
         }
         if (!this.#ran.has(v.id)) { this.#ran.add(v.id); addCss(v, e.id, this.#sm); loadExternalJs(v).then(function() { runJs(v); }); }
+        if (this.#ht) this.#ht.setVariantId(v.id);
+        if (this.#ft) this.#ft.setVariantId(v.id);
         applied = true;
       }
     }
@@ -746,6 +754,8 @@ export class GrowthRoadmaps {
       if (!v) { v = assignVariant(e.id, u, e.variants); this.#a.set(e.id, v); assigned = true; }
       addCss(v, e.id, this.#sm);
       if ((v.js || (v.external_js && v.external_js.length)) && !this.#ran.has(v.id)) { this.#ran.add(v.id); loadExternalJs(v).then(function() { runJs(v); }); }
+      if (this.#ht) this.#ht.setVariantId(v.id);
+      if (this.#ft) this.#ft.setVariantId(v.id);
     }
     if (assigned) saveAssignments(this.#pk(), this.#a, this.#e);
   }
