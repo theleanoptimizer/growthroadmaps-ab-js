@@ -259,11 +259,14 @@ function runJs(v: Variant): void {
 function goalKey(g: Goal): string { return g.goal_type + (g.value ? ':' + g.value : ''); }
 
 function mkEvt(eid: string, vid: string, uid: string, sid?: string, extra?: Record<string, unknown>): ABEvent {
-  return { type: 'exposure', experiment_id: eid, variant_id: vid, user_id: uid, session_id: sid, timestamp: new Date().toISOString(), ...extra } as ABEvent;
+  const extraMeta = extra?.metadata as Record<string, unknown> | undefined;
+  const metadata: Record<string, unknown> = { ...(extraMeta || {}), device_type: devType() };
+  return { type: 'exposure', experiment_id: eid, variant_id: vid, user_id: uid, session_id: sid, timestamp: new Date().toISOString(), metadata } as ABEvent;
 }
 
 function mkConv(eid: string, vid: string, uid: string, sid: string | undefined, gn: string, gv?: number, md?: Record<string, unknown>): ABEvent {
-  return { type: 'conversion', experiment_id: eid, variant_id: vid, user_id: uid, session_id: sid, goal_name: gn, goal_value: gv, metadata: md, timestamp: new Date().toISOString() } as ABEvent;
+  const metadata = { ...(md || {}), device_type: devType() };
+  return { type: 'conversion', experiment_id: eid, variant_id: vid, user_id: uid, session_id: sid, goal_name: gn, goal_value: gv, metadata, timestamp: new Date().toISOString() } as ABEvent;
 }
 
 export class GrowthRoadmaps {
@@ -304,6 +307,18 @@ export class GrowthRoadmaps {
       else { try { if (sessionStorage.getItem('_ab_debug') === '1') this.#debug = true; } catch {} }
     }
     if (!c.userId && !c.sessionId && D) c.userId = vid(this.#consentRequired);
+    if (!c.sessionId) {
+      try {
+        let sid = sessionStorage.getItem('_ab_sid');
+        if (!sid) {
+          sid = uuid();
+          if (this.#consent) sessionStorage.setItem('_ab_sid', sid);
+        }
+        c.sessionId = sid;
+      } catch {
+        c.sessionId = uuid();
+      }
+    }
     if (W && W.__gr_loader_ran) {
       const cfg = W.__gr_loader_cfg;
       if (cfg) {
@@ -515,6 +530,11 @@ export class GrowthRoadmaps {
     if (u) {
       const existing = gc('_ab_vid');
       if (!existing) sc(u);
+    }
+    if (this.#c.sessionId) {
+      try {
+        if (!sessionStorage.getItem('_ab_sid')) sessionStorage.setItem('_ab_sid', this.#c.sessionId);
+      } catch {}
     }
     this.#b.start();
     for (const e of this.#pendingEvents) this.#b.push(e);
