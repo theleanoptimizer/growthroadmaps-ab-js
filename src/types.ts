@@ -228,6 +228,16 @@ export interface SurveySettings {
   hideBackButton?: boolean;
 }
 
+export interface ExperimentAttachment {
+  experimentId: string;
+  variantIds: string[];
+  triggerType: 'delay' | 'pageView' | 'exitIntent' | 'event' | 'conversion';
+  delaySeconds: number;
+  eventName?: string | null;
+  goalId?: string | null;
+  createdAt?: string;
+}
+
 export interface SurveyData {
   id: string;
   name: string;
@@ -240,6 +250,8 @@ export interface SurveyData {
   thankYouCard?: SurveyThankYouCard;
   styling?: SurveyStyling;
   settings?: SurveySettings;
+  experimentAttachments?: ExperimentAttachment[];
+  meta?: Record<string, unknown>;
 }
 
 declare global {

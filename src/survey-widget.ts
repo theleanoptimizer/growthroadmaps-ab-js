@@ -202,9 +202,11 @@ export function renderSurveyWidget(survey: SurveyData, apiHost: string, userId: 
   }
 
   function submitResponse(): void {
-    const payload: { data: Record<string, AnswerValue>; meta: { userAgent: string; url: string; referrer: string }; status: string; respondentId?: string } = {
+    const baseMeta: Record<string, unknown> = { userAgent: navigator.userAgent, url: window.location.href, referrer: document.referrer };
+    const extraMeta = (survey as { meta?: Record<string, unknown> }).meta || {};
+    const payload: { data: Record<string, AnswerValue>; meta: Record<string, unknown>; status: string; respondentId?: string } = {
       data: answers,
-      meta: { userAgent: navigator.userAgent, url: window.location.href, referrer: document.referrer },
+      meta: { ...baseMeta, ...extraMeta },
       status: 'complete'
     };
     if (userId) payload.respondentId = userId;

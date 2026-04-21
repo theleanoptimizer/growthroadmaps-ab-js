@@ -80,18 +80,22 @@ function vid(skipCookie?: boolean): string {
   return id;
 }
 
-function saveAssignments(pk: string, assignments: Map<string, Variant>, experiments: ExperimentConfig[]): void {
+interface SavedAssignment { variantId: string; css?: string; external_css?: string[]; external_js?: string[]; exposedAt?: number }
+
+function saveAssignments(pk: string, assignments: Map<string, Variant>, experiments: ExperimentConfig[], exposedAt?: Map<string, number>): void {
   try {
-    const out: Record<string, { variantId: string; css?: string; external_css?: string[]; external_js?: string[] }> = {};
+    const out: Record<string, SavedAssignment> = {};
     for (const [eid, v] of assignments) {
       const e = experiments.find(x => x.id === eid);
       if (e && e.status === 'running') {
-        const entry: { variantId: string; css?: string; external_css?: string[]; external_js?: string[] } = { variantId: v.id };
+        const entry: SavedAssignment = { variantId: v.id };
         if (e.mode === 'client') {
           if (v.css) entry.css = v.css;
           if (v.external_css) entry.external_css = v.external_css;
           if (v.external_js) entry.external_js = v.external_js;
         }
+        const ts = exposedAt?.get(eid);
+        if (ts) entry.exposedAt = ts;
         out[eid] = entry;
       }
     }
@@ -100,12 +104,12 @@ function saveAssignments(pk: string, assignments: Map<string, Variant>, experime
   try { syncExpCookie(assignments, experiments); } catch {}
 }
 
-function loadAssignments(pk: string, experiments: ExperimentConfig[]): Map<string, Variant> {
+function loadAssignments(pk: string, experiments: ExperimentConfig[], exposedAtOut?: Map<string, number>): Map<string, Variant> {
   const map = new Map<string, Variant>();
   try {
     const raw = localStorage.getItem('ab_va_' + pk);
     if (!raw) return map;
-    const saved: Record<string, { variantId: string; css?: string; external_css?: string[]; external_js?: string[] }> = JSON.parse(raw);
+    const saved: Record<string, SavedAssignment> = JSON.parse(raw);
     if (!saved || typeof saved !== 'object') return map;
     for (const eid in saved) {
       const entry = saved[eid];
@@ -113,7 +117,10 @@ function loadAssignments(pk: string, experiments: ExperimentConfig[]): Map<strin
       const e = experiments.find(x => x.id === eid && x.status === 'running');
       if (!e || !e.variants?.length) continue;
       const v = e.variants.find(x => x.id === entry.variantId);
-      if (v) map.set(eid, v);
+      if (v) {
+        map.set(eid, v);
+        if (exposedAtOut && entry.exposedAt) exposedAtOut.set(eid, entry.exposedAt);
+      }
     }
   } catch {}
   return map;
@@ -275,6 +282,7 @@ export class GrowthRoadmaps {
   #p: ProjectInfo | null = null;
   #b: EventBatcher;
   #seen = new Set<string>();
+  #exposedAt = new Map<string, number>();
   #a = new Map<string, Variant>();
   #ran = new Set<string>();
   #cl: (() => void)[] = [];
@@ -479,7 +487,7 @@ export class GrowthRoadmaps {
       revealPage();
       if (this.#consent && !this.#pv) this.#b.start();
       if (!this.#pv) {
-        const restored = loadAssignments(this.#pk(), this.#e);
+        const restored = loadAssignments(this.#pk(), this.#e, this.#exposedAt);
         for (const [eid, v] of restored) {
           if (!this.#a.has(eid)) {
             this.#a.set(eid, v);
@@ -664,8 +672,10 @@ export class GrowthRoadmaps {
     }
     if (!this.#seen.has(e.id)) {
       this.#seen.add(e.id);
+      this.#exposedAt.set(e.id, Date.now());
       this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined));
       this.#dbg('Exposure event sent:', name, '→', v.name);
+      if (this.#sv) this.#sv.onExposure();
     }
     if (ex) return v.name;
     if (e.ga && !this.#gf.has(e.id)) {
@@ -674,7 +684,7 @@ export class GrowthRoadmaps {
     if (this.#ht) this.#ht.setVariantId(v.id);
     if (this.#ft) this.#ft.setVariantId(v.id);
     if (e.mode === 'client' && !this.#ran.has(v.id)) { this.#ran.add(v.id); addCss(v, e.id, this.#sm); loadExternalJs(v).then(function() { runJs(v); }); }
-    saveAssignments(this.#pk(), this.#a, this.#e);
+    saveAssignments(this.#pk(), this.#a, this.#e, this.#exposedAt);
     return v.name;
   }
 
@@ -687,10 +697,11 @@ export class GrowthRoadmaps {
     for (const [eid, v] of this.#a) {
       const e = this.#e.find(x => x.id === eid);
       if (!e) continue;
-      const hasGoal = e.goals?.some(g => g.goal_type === 'custom' && (g.label === goal || g.value === goal));
-      if (!hasGoal) { this.#dbg('track() SKIPPED:', e.name, '— no matching custom goal for', goal); continue; }
+      const matchedGoal = e.goals?.find(g => g.goal_type === 'custom' && (g.label === goal || g.value === goal));
+      if (!matchedGoal) { this.#dbg('track() SKIPPED:', e.name, '— no matching custom goal for', goal); continue; }
       this.#dbg('Conversion sent (track):', e.name, '→', v.name, 'goal:', goal);
       this.#pushEvent(mkConv(e.id, v.id, u, this.#c.sessionId, goal, o?.value, o?.metadata));
+      if (this.#sv) this.#sv.onConversion(e.id, matchedGoal.id);
       sent++;
     }
     if (sent === 0) this.#dbg('track() WARNING: no matching experiments found for goal', goal);
@@ -705,6 +716,8 @@ export class GrowthRoadmaps {
     if (!e || !v) { this.#dbg('trackFor() SKIPPED:', en, 'goal:', gn, '— no assignment found', e ? '(experiment exists but no variant assigned)' : '(experiment not found)'); return; }
     this.#dbg('Conversion sent (trackFor):', en, '→', v.name, 'goal:', gn);
     this.#pushEvent(mkConv(e.id, v.id, u, this.#c.sessionId, gn, o?.value));
+    const matchedGoal = e.goals?.find(g => goalKey(g) === gn);
+    if (matchedGoal && this.#sv) this.#sv.onConversion(e.id, matchedGoal.id);
   }
 
   #urlGoal(en: string, gn: string, g: Goal): void {
@@ -741,8 +754,10 @@ export class GrowthRoadmaps {
       }
       if (!this.#seen.has(e.id)) {
         this.#seen.add(e.id);
+        this.#exposedAt.set(e.id, Date.now());
         this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined));
         this.#dbg('Exposure event sent:', e.name, '→', v.name);
+        if (this.#sv) this.#sv.onExposure();
       }
       if (!ex) {
         if (e.ga && !this.#gf.has(e.id)) {
@@ -754,7 +769,7 @@ export class GrowthRoadmaps {
         applied = true;
       }
     }
-    if (applied || assigned) saveAssignments(this.#pk(), this.#a, this.#e);
+    if (applied || assigned) saveAssignments(this.#pk(), this.#a, this.#e, this.#exposedAt);
   }
 
   #reeval(): void {
@@ -777,7 +792,7 @@ export class GrowthRoadmaps {
       if (this.#ht) this.#ht.setVariantId(v.id);
       if (this.#ft) this.#ft.setVariantId(v.id);
     }
-    if (assigned) saveAssignments(this.#pk(), this.#a, this.#e);
+    if (assigned) saveAssignments(this.#pk(), this.#a, this.#e, this.#exposedAt);
   }
 
   #onNav(): void {
@@ -810,7 +825,13 @@ export class GrowthRoadmaps {
     try {
       const mod = await import('./survey') as SurveyModule & LazyModule<SurveyModule>;
       const resolved = typeof mod.__lazyLoad === 'function' ? await mod.__lazyLoad() : mod;
-      this.#sv = new resolved.SurveyManager(this.#c.apiHost, teamId, this.#c.userId);
+      this.#sv = new resolved.SurveyManager(this.#c.apiHost, teamId, this.#c.userId, () => {
+        const map = new Map<string, { variantId: string; exposedAt: number | null }>();
+        for (const [eid, v] of this.#a) {
+          map.set(eid, { variantId: v.id, exposedAt: this.#exposedAt.get(eid) || null });
+        }
+        return map;
+      });
       const load = () => this.#sv!.load();
       if (D && D.readyState === 'complete') {
         if (typeof requestIdleCallback === 'function') requestIdleCallback(load);
