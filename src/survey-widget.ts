@@ -308,7 +308,7 @@ export function renderSurveyWidget(survey: SurveyData, apiHost: string, userId: 
       html += '</div>';
     } else if (currentStep >= 0 && currentStep < questions.length) {
       const q = questions[currentStep];
-      if (styling.progressBar !== false) {
+      if (styling.progressBar !== false && questions.length > 1) {
         html += '<div class="gs-progress"><div class="gs-progress-bar" style="width:' + ((currentStep + 1) / questions.length * 100) + '%"></div></div>';
       }
       html += renderQuestion(q, currentStep, answers);
