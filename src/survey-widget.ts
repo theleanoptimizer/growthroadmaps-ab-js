@@ -22,7 +22,7 @@ function ensureMobilePositionStyle(): void {
   if (document.getElementById(MOBILE_POSITION_STYLE_ID)) return;
   const style = document.createElement('style');
   style.id = MOBILE_POSITION_STYLE_ID;
-  style.textContent = '@media (max-width:479px){#growth-surveys-widget{top:50%!important;left:50%!important;right:auto!important;bottom:auto!important;transform:translate(-50%,-50%)!important;}}';
+  style.textContent = '@media (max-width:479px){#growth-surveys-widget:not([data-gs-modal]){top:50%!important;left:50%!important;right:auto!important;bottom:auto!important;transform:translate(-50%,-50%)!important;}}';
   document.head.appendChild(style);
 }
 
@@ -83,7 +83,7 @@ function getStyles(styling: SurveyData['styling']): string {
   const blurCss = backdrop.blur > 0 ? 'backdrop-filter:blur(' + backdrop.blur + 'px);-webkit-backdrop-filter:blur(' + backdrop.blur + 'px);' : '';
   return '<style>' +
     '*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}' +
-    '.gs-backdrop{position:fixed;top:0;left:0;width:100vw;height:100vh;background:' + backdrop.bg + ';' + blurCss + 'z-index:0;}' +
+    '.gs-backdrop{position:fixed;inset:0;background:' + backdrop.bg + ';' + blurCss + 'z-index:0;}' +
     '.gs-card{position:relative;z-index:1;background:' + bgColor + ';color:' + textColor + ';border-radius:' + borderRadius + ';box-shadow:' + shadow + ';width:380px;max-width:calc(100vw - 40px);max-height:80vh;overflow-y:auto;border-top:3px solid ' + brandColor + ';}' +
     '.gs-inner{padding:24px;}' +
     '.gs-close{position:absolute;top:12px;right:12px;background:none;border:none;cursor:pointer;color:#9ca3af;font-size:18px;line-height:1;}' +
@@ -223,10 +223,14 @@ export function renderSurveyWidget(survey: SurveyData, apiHost: string, userId: 
     topLeft: 'top:20px;left:20px;',
     center: 'top:50%;left:50%;transform:translate(-50%,-50%);'
   };
-  container.host.style.cssText += positionStyles[position] || positionStyles.bottomRight;
-
   const isCenterPosition = position === 'center' || (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width:479px)').matches);
   const showBackdrop = !!styling.backdrop && isCenterPosition;
+  if (showBackdrop) {
+    container.host.setAttribute('data-gs-modal', '1');
+    container.host.style.cssText = 'position:fixed;inset:0;z-index:999999;display:flex;align-items:center;justify-content:center;';
+  } else {
+    container.host.style.cssText += positionStyles[position] || positionStyles.bottomRight;
+  }
   const backdropClickToClose = !!styling.backdrop && !!styling.backdropClickToClose;
   let prevBodyOverflow: string | null = null;
   if (showBackdrop && typeof document !== 'undefined' && document.body) {
