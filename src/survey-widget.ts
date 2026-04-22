@@ -55,6 +55,23 @@ function resolveShadow(value: string | undefined): string {
   return SHADOW_MAP[value || 'medium'] || SHADOW_MAP.medium;
 }
 
+function hexToRgba(hex: string, opacity: number): string {
+  const h = (hex || '').replace('#', '').trim();
+  const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+  if (!/^[0-9a-fA-F]{6}$/.test(full)) return 'rgba(0,0,0,' + opacity + ')';
+  const r = parseInt(full.slice(0, 2), 16);
+  const g = parseInt(full.slice(2, 4), 16);
+  const b = parseInt(full.slice(4, 6), 16);
+  return 'rgba(' + r + ',' + g + ',' + b + ',' + opacity + ')';
+}
+
+function resolveBackdrop(s: NonNullable<SurveyData['styling']>): { bg: string; blur: number } {
+  const color = sanitizeCssValue(s.backdropColor || '#000000');
+  const op = typeof s.backdropOpacity === 'number' ? Math.max(0, Math.min(1, s.backdropOpacity)) : 0.5;
+  const blur = typeof s.backdropBlur === 'number' ? Math.max(0, Math.min(20, s.backdropBlur)) : 0;
+  return { bg: hexToRgba(color, op), blur };
+}
+
 function getStyles(styling: SurveyData['styling']): string {
   const s = styling || {};
   const brandColor = sanitizeCssValue(s.brandColor || '#6366f1');
@@ -62,9 +79,11 @@ function getStyles(styling: SurveyData['styling']): string {
   const textColor = sanitizeCssValue(s.textColor || '#1f2937');
   const borderRadius = sanitizeCssValue(s.borderRadius || '8') + 'px';
   const shadow = resolveShadow(s.shadow);
+  const backdrop = resolveBackdrop(s);
+  const blurCss = backdrop.blur > 0 ? 'backdrop-filter:blur(' + backdrop.blur + 'px);-webkit-backdrop-filter:blur(' + backdrop.blur + 'px);' : '';
   return '<style>' +
     '*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}' +
-    '.gs-backdrop{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,.5);z-index:0;}' +
+    '.gs-backdrop{position:fixed;top:0;left:0;width:100vw;height:100vh;background:' + backdrop.bg + ';' + blurCss + 'z-index:0;}' +
     '.gs-card{position:relative;z-index:1;background:' + bgColor + ';color:' + textColor + ';border-radius:' + borderRadius + ';box-shadow:' + shadow + ';width:380px;max-width:calc(100vw - 40px);max-height:80vh;overflow-y:auto;border-top:3px solid ' + brandColor + ';}' +
     '.gs-inner{padding:24px;}' +
     '.gs-close{position:absolute;top:12px;right:12px;background:none;border:none;cursor:pointer;color:#9ca3af;font-size:18px;line-height:1;}' +

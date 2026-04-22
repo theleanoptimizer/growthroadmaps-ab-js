@@ -226,6 +226,9 @@ export interface SurveyStyling {
   shadow?: 'none' | 'soft' | 'medium' | 'strong';
   backdrop?: boolean;
   backdropClickToClose?: boolean;
+  backdropColor?: string;
+  backdropOpacity?: number;
+  backdropBlur?: number;
 }
 
 export interface SurveySettings {
