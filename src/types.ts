@@ -216,12 +216,16 @@ export interface SurveyThankYouCard {
 }
 
 export interface SurveyStyling {
-  position?: 'bottomRight' | 'bottomLeft' | 'center';
+  position?: 'bottomRight' | 'bottomLeft' | 'center' | 'topRight' | 'topLeft';
   brandColor?: string;
   bgColor?: string;
   textColor?: string;
   borderRadius?: string;
   progressBar?: boolean;
+  progressStyle?: 'bar' | 'counter' | 'both' | 'none';
+  shadow?: 'none' | 'soft' | 'medium' | 'strong';
+  backdrop?: boolean;
+  backdropClickToClose?: boolean;
 }
 
 export interface SurveySettings {

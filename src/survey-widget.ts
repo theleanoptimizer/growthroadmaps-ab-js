@@ -16,7 +16,18 @@ interface SurveyContainer {
   shadow: ShadowRoot;
 }
 
+const MOBILE_POSITION_STYLE_ID = 'growth-surveys-mobile-position';
+
+function ensureMobilePositionStyle(): void {
+  if (document.getElementById(MOBILE_POSITION_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = MOBILE_POSITION_STYLE_ID;
+  style.textContent = '@media (max-width:479px){#growth-surveys-widget{top:50%!important;left:50%!important;right:auto!important;bottom:auto!important;transform:translate(-50%,-50%)!important;}}';
+  document.head.appendChild(style);
+}
+
 function createShadowContainer(): SurveyContainer {
+  ensureMobilePositionStyle();
   const host = document.createElement('div');
   host.id = 'growth-surveys-widget';
   host.style.cssText = 'position:fixed;z-index:999999;';
@@ -33,15 +44,28 @@ interface ActiveWidget {
 
 let activeWidgets: ActiveWidget[] = [];
 
+const SHADOW_MAP: Record<string, string> = {
+  none: 'none',
+  soft: '0 6px 20px rgba(0,0,0,.12)',
+  medium: '0 20px 60px rgba(0,0,0,.25)',
+  strong: '0 30px 80px rgba(0,0,0,.4)',
+};
+
+function resolveShadow(value: string | undefined): string {
+  return SHADOW_MAP[value || 'medium'] || SHADOW_MAP.medium;
+}
+
 function getStyles(styling: SurveyData['styling']): string {
   const s = styling || {};
   const brandColor = sanitizeCssValue(s.brandColor || '#6366f1');
   const bgColor = sanitizeCssValue(s.bgColor || '#ffffff');
   const textColor = sanitizeCssValue(s.textColor || '#1f2937');
   const borderRadius = sanitizeCssValue(s.borderRadius || '8') + 'px';
+  const shadow = resolveShadow(s.shadow);
   return '<style>' +
     '*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}' +
-    '.gs-card{background:' + bgColor + ';color:' + textColor + ';border-radius:' + borderRadius + ';box-shadow:0 10px 40px rgba(0,0,0,.15);width:380px;max-width:calc(100vw - 40px);max-height:80vh;overflow-y:auto;border-top:3px solid ' + brandColor + ';}' +
+    '.gs-backdrop{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,.5);z-index:0;}' +
+    '.gs-card{position:relative;z-index:1;background:' + bgColor + ';color:' + textColor + ';border-radius:' + borderRadius + ';box-shadow:' + shadow + ';width:380px;max-width:calc(100vw - 40px);max-height:80vh;overflow-y:auto;border-top:3px solid ' + brandColor + ';}' +
     '.gs-inner{padding:24px;}' +
     '.gs-close{position:absolute;top:12px;right:12px;background:none;border:none;cursor:pointer;color:#9ca3af;font-size:18px;line-height:1;}' +
     '.gs-close:hover{color:' + textColor + ';}' +
@@ -64,8 +88,9 @@ function getStyles(styling: SurveyData['styling']): string {
     '.gs-checkbox{width:16px;height:16px;border-radius:4px;border:2px solid #d1d5db;display:flex;align-items:center;justify-content:center;flex-shrink:0;}' +
     '.gs-checkbox.selected{border-color:' + brandColor + ';background:' + brandColor + ';}' +
     '.gs-checkbox.selected::after{content:"\\2713";color:#fff;font-size:11px;}' +
-    '.gs-progress{width:100%;height:3px;background:#e5e7eb;border-radius:2px;margin-bottom:16px;}' +
+    '.gs-progress{width:100%;height:3px;background:#e5e7eb;border-radius:2px;margin-top:16px;}' +
     '.gs-progress-bar{height:100%;border-radius:2px;background:' + brandColor + ';transition:width .3s;}' +
+    '.gs-progress-counter{font-size:11px;color:#9ca3af;margin-top:8px;text-align:center;}' +
     '.gs-nav{display:flex;justify-content:space-between;align-items:center;margin-top:16px;}' +
     '.gs-rating{display:flex;gap:4px;justify-content:center;margin:8px 0;}' +
     '.gs-rating-item{width:36px;height:36px;border-radius:50%;border:2px solid #d1d5db;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:13px;font-weight:500;transition:all .15s;}' +
@@ -175,9 +200,48 @@ export function renderSurveyWidget(survey: SurveyData, apiHost: string, userId: 
   const positionStyles: Record<string, string> = {
     bottomRight: 'bottom:20px;right:20px;',
     bottomLeft: 'bottom:20px;left:20px;',
+    topRight: 'top:20px;right:20px;',
+    topLeft: 'top:20px;left:20px;',
     center: 'top:50%;left:50%;transform:translate(-50%,-50%);'
   };
   container.host.style.cssText += positionStyles[position] || positionStyles.bottomRight;
+
+  const isCenterPosition = position === 'center' || (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width:479px)').matches);
+  const showBackdrop = !!styling.backdrop && isCenterPosition;
+  const backdropClickToClose = !!styling.backdrop && !!styling.backdropClickToClose;
+  let prevBodyOverflow: string | null = null;
+  if (showBackdrop && typeof document !== 'undefined' && document.body) {
+    prevBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+  }
+  function releaseScrollLock(): void {
+    if (showBackdrop && typeof document !== 'undefined' && document.body) {
+      document.body.style.overflow = prevBodyOverflow || '';
+    }
+  }
+  (container.host as HTMLDivElement & { __gsCleanup?: () => void }).__gsCleanup = releaseScrollLock;
+
+  function submitPartialResponse(): void {
+    if (Object.keys(answers).length === 0) return;
+    const baseMeta: Record<string, unknown> = { userAgent: navigator.userAgent, url: window.location.href, referrer: document.referrer };
+    const extraMeta = (survey as { meta?: Record<string, unknown> }).meta || {};
+    const payload: { data: Record<string, AnswerValue>; meta: Record<string, unknown>; status: string; respondentId?: string } = {
+      data: answers,
+      meta: { ...baseMeta, ...extraMeta },
+      status: 'partial'
+    };
+    if (userId) payload.respondentId = userId;
+    fetch(apiHost + '/api/public/surveys/' + survey.id + '/respond', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+    }).catch(function() {});
+  }
+
+  function dismissWidget(savePartial: boolean): void {
+    if (savePartial && currentStep >= 0 && currentStep < questions.length) submitPartialResponse();
+    releaseScrollLock();
+    container.host.remove();
+    activeWidgets = activeWidgets.filter(w => w.host !== container.host);
+  }
 
   function evaluateLogic(q: SurveyQuestion): string | null {
     if (!q.logic || q.logic.length === 0) return null;
@@ -239,7 +303,7 @@ export function renderSurveyWidget(survey: SurveyData, apiHost: string, userId: 
     root.querySelectorAll('[data-action]').forEach(el => {
       el.addEventListener('click', (e: Event) => {
         const action = (e.currentTarget as Element).getAttribute('data-action');
-        if (action === 'close') { container.host.remove(); activeWidgets = activeWidgets.filter(w => w.host !== container.host); }
+        if (action === 'close') { dismissWidget(false); }
         if (action === 'start') { currentStep = 0; render(); }
         if (action === 'back') { currentStep = Math.max(0, currentStep - 1); render(); }
         if (action === 'next') { goNext(); }
@@ -291,12 +355,19 @@ export function renderSurveyWidget(survey: SurveyData, apiHost: string, userId: 
         if (qid) answers[qid] = (e.target as HTMLInputElement).value;
       });
     });
+    if (showBackdrop && backdropClickToClose) {
+      const backdrop = root.querySelector('.gs-backdrop');
+      if (backdrop) {
+        backdrop.addEventListener('click', () => { dismissWidget(true); });
+      }
+    }
   }
 
   function render(): void {
     if (!cachedStyles) cachedStyles = getStyles(styling);
     let html = cachedStyles;
-    html += '<div class="gs-card" style="position:relative;">';
+    if (showBackdrop) html += '<div class="gs-backdrop"></div>';
+    html += '<div class="gs-card">';
     html += '<button class="gs-close" data-action="close">&times;</button>';
     html += '<div class="gs-inner">';
 
@@ -308,9 +379,6 @@ export function renderSurveyWidget(survey: SurveyData, apiHost: string, userId: 
       html += '</div>';
     } else if (currentStep >= 0 && currentStep < questions.length) {
       const q = questions[currentStep];
-      if (styling.progressBar !== false && questions.length > 1) {
-        html += '<div class="gs-progress"><div class="gs-progress-bar" style="width:' + ((currentStep + 1) / questions.length * 100) + '%"></div></div>';
-      }
       html += renderQuestion(q, currentStep, answers);
       html += '<div class="gs-nav">';
       if (currentStep > 0 && !settings.hideBackButton) {
@@ -320,6 +388,15 @@ export function renderSurveyWidget(survey: SurveyData, apiHost: string, userId: 
       }
       html += '<button class="gs-btn gs-btn-primary" data-action="next">' + (currentStep === questions.length - 1 ? 'Submit' : 'Next') + '</button>';
       html += '</div>';
+      const progressStyle: string = styling.progressStyle || (styling.progressBar === false ? 'none' : 'bar');
+      if (progressStyle !== 'none' && questions.length > 1) {
+        if (progressStyle === 'bar' || progressStyle === 'both') {
+          html += '<div class="gs-progress"><div class="gs-progress-bar" style="width:' + ((currentStep + 1) / questions.length * 100) + '%"></div></div>';
+        }
+        if (progressStyle === 'counter' || progressStyle === 'both') {
+          html += '<div class="gs-progress-counter">Question ' + (currentStep + 1) + ' of ' + questions.length + '</div>';
+        }
+      }
     } else {
       html += '<div class="gs-center">';
       html += '<div class="gs-headline">' + escapeHtml(thankYouCard.headline || 'Thank you!') + '</div>';
@@ -358,6 +435,8 @@ export function removePageUrlWidgets(): { removed: ActiveWidget[] } {
     }
   }
   for (const w of toRemove) {
+    const cleanup = (w.host as HTMLDivElement & { __gsCleanup?: () => void }).__gsCleanup;
+    if (cleanup) cleanup();
     w.host.remove();
     activeWidgets = activeWidgets.filter(a => a !== w);
   }

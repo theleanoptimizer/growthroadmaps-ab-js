@@ -1,5 +1,5 @@
 import { SurveyData, SurveyTrigger, ExperimentAttachment } from './types';
-import { shouldShowToUser, matchTrigger } from './survey-trigger';
+import { shouldShowToUser, matchTrigger, surveyHasPageUrlTrigger, surveyPageUrlMatches } from './survey-trigger';
 
 interface SurveyWidgetModule {
   renderSurveyWidget: (survey: SurveyData, apiHost: string, userId: string | null, teamId: string, shown: Set<string>) => void;
@@ -208,10 +208,22 @@ export class SurveyManager {
       if (!shouldShowToUser(survey, this.#teamId, this.#shown, this.#attrs)) continue;
       const triggers = survey.triggers || [];
       if (triggers.length === 0) continue;
+      const hasPageUrl = surveyHasPageUrlTrigger(survey);
+      // URL match acts as a filter for immediate-fire triggers (pageLoad, pageUrl).
+      // For event-based triggers (click, scroll, exit) we always register the
+      // listener so they survive SPA navigation, and gate at fire-time below.
+      const urlMatchesNow = hasPageUrl ? surveyPageUrlMatches(survey) : true;
+      const onlyPageUrl = hasPageUrl && triggers.every(t => t.type === 'pageUrl');
       for (const trigger of triggers) {
+        if (trigger.type === 'pageUrl') {
+          // Preserve legacy behavior: when pageUrl is the ONLY trigger, fire on load.
+          if (onlyPageUrl && urlMatchesNow) this.#showSurvey(survey);
+          continue;
+        }
         if (!matchTrigger(trigger)) continue;
         switch (trigger.type) {
           case 'pageLoad': {
+            if (!urlMatchesNow) break;
             const delay = (trigger.delay || 0) * 1000;
             setTimeout(() => this.#showSurvey(survey), delay);
             break;
@@ -219,7 +231,11 @@ export class SurveyManager {
           case 'exitIntent':
             if (D) {
               const handler = (e: MouseEvent) => {
-                if (e.clientY < 0) { D!.removeEventListener('mouseleave', handler); this.#showSurvey(survey); }
+                if (e.clientY < 0) {
+                  D!.removeEventListener('mouseleave', handler);
+                  if (hasPageUrl && !surveyPageUrlMatches(survey)) return;
+                  this.#showSurvey(survey);
+                }
               };
               D.addEventListener('mouseleave', handler);
             }
@@ -236,6 +252,7 @@ export class SurveyManager {
                   rafPending = false;
                   if (flag.fired) return;
                   if (!shouldShowToUser(flag.survey, this.#teamId, this.#shown, this.#attrs)) return;
+                  if (surveyHasPageUrlTrigger(flag.survey) && !surveyPageUrlMatches(flag.survey)) return;
                   if (!matchTrigger(flag.trigger)) return;
                   const scrollPct = (W!.scrollY + W!.innerHeight) / D!.documentElement.scrollHeight * 100;
                   if (scrollPct >= 50) { flag.fired = true; this.#showSurvey(flag.survey); }
@@ -247,12 +264,11 @@ export class SurveyManager {
           case 'clickElement':
             if (trigger.cssSelector && D) {
               D.addEventListener('click', (e: Event) => {
-                if ((e.target as Element)?.matches?.(trigger.cssSelector!)) this.#showSurvey(survey);
+                if (!(e.target as Element)?.matches?.(trigger.cssSelector!)) return;
+                if (hasPageUrl && !surveyPageUrlMatches(survey)) return;
+                this.#showSurvey(survey);
               });
             }
-            break;
-          case 'pageUrl':
-            this.#showSurvey(survey);
             break;
         }
       }
@@ -291,12 +307,14 @@ export class SurveyManager {
       if (!shouldShowToUser(survey, this.#teamId, this.#shown, this.#attrs)) continue;
       const triggers = survey.triggers || [];
       if (triggers.length === 0) continue;
+      const hasPageUrl = surveyHasPageUrlTrigger(survey);
+      if (hasPageUrl && !surveyPageUrlMatches(survey)) continue;
+      const onlyPageUrl = hasPageUrl && triggers.every(t => t.type === 'pageUrl');
       for (const trigger of triggers) {
-        if (!matchTrigger(trigger)) continue;
         if (trigger.type === 'pageLoad' && trigger.triggerOnRouteChange !== false) {
           const delay = (trigger.delay || 0) * 1000;
           setTimeout(() => this.#showSurvey(survey), delay);
-        } else if (trigger.type === 'pageUrl') {
+        } else if (trigger.type === 'pageUrl' && onlyPageUrl) {
           this.#showSurvey(survey);
         }
       }
@@ -315,6 +333,7 @@ export class SurveyManager {
         continue;
       }
       if (!shouldShowToUser(survey, this.#teamId, this.#shown, this.#attrs)) continue;
+      if (surveyHasPageUrlTrigger(survey) && !surveyPageUrlMatches(survey)) continue;
       for (const trigger of (survey.triggers || [])) {
         if (trigger.type === 'code' && trigger.actionName === actionName) {
           this.#showSurvey(survey);
