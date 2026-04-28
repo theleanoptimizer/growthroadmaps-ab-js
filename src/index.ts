@@ -8,6 +8,7 @@ import {
   Goal,
   TargetingRule,
   ABEvent,
+  AudienceAttributeConfig,
 } from './types';
 import { assignVariant, fnv1a } from './hasher';
 import { getCachedConfig, setCachedConfig, isCacheFresh } from './storage';
@@ -265,14 +266,16 @@ function runJs(v: Variant): void {
 
 function goalKey(g: Goal): string { return g.goal_type + (g.value ? ':' + g.value : ''); }
 
-function mkEvt(eid: string, vid: string, uid: string, sid?: string, extra?: Record<string, unknown>): ABEvent {
+function mkEvt(eid: string, vid: string, uid: string, sid?: string, extra?: Record<string, unknown>, attrs?: Record<string, string>): ABEvent {
   const extraMeta = extra?.metadata as Record<string, unknown> | undefined;
   const metadata: Record<string, unknown> = { ...(extraMeta || {}), device_type: devType() };
+  if (attrs && Object.keys(attrs).length > 0) metadata.attributes = { ...attrs };
   return { type: 'exposure', experiment_id: eid, variant_id: vid, user_id: uid, session_id: sid, timestamp: new Date().toISOString(), metadata } as ABEvent;
 }
 
-function mkConv(eid: string, vid: string, uid: string, sid: string | undefined, gn: string, gv?: number, md?: Record<string, unknown>): ABEvent {
-  const metadata = { ...(md || {}), device_type: devType() };
+function mkConv(eid: string, vid: string, uid: string, sid: string | undefined, gn: string, gv?: number, md?: Record<string, unknown>, attrs?: Record<string, string>): ABEvent {
+  const metadata: Record<string, unknown> = { ...(md || {}), device_type: devType() };
+  if (attrs && Object.keys(attrs).length > 0) metadata.attributes = { ...attrs };
   return { type: 'conversion', experiment_id: eid, variant_id: vid, user_id: uid, session_id: sid, goal_name: gn, goal_value: gv, metadata, timestamp: new Date().toISOString() } as ABEvent;
 }
 
@@ -303,6 +306,16 @@ export class GrowthRoadmaps {
   #fac: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; form_selectors?: string[] }> = [];
   #sv: SurveyManager | null = null;
   #debug = false;
+  // Project-level audience attribute definitions (from /all-configs).
+  #aud: AudienceAttributeConfig[] = [];
+  // Detected attribute key -> value (in-memory + sessionStorage backed).
+  // Forwarded on every subsequent event in metadata.attributes so results
+  // can be filtered by audience slice. Reserved keys can never appear.
+  #attrs: Record<string, string> = {};
+  #audCl: (() => void)[] = [];
+  // Tracks one-shot audience rules already fired so listeners don't re-set
+  // the same attribute on every click/submit.
+  #audFired = new Set<string>();
 
   constructor(c: GrowthConfig) {
     this.#consentRequired = c.cookieConsent === 'required';
@@ -336,7 +349,73 @@ export class GrowthRoadmaps {
     }
     this.#c = c;
     this.#b = new EventBatcher(c.apiHost, c.projectKey || '', this.#debug);
+    // Restore previously-detected audience attributes for this session so a
+    // visitor who clicked "pricing" earlier still gets that attribute on the
+    // exposure fired on the next page.
+    try {
+      const raw = sessionStorage.getItem('_ab_attrs_' + (c.projectKey || ''));
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          for (const k in parsed) {
+            if (typeof parsed[k] === 'string' && /^[a-z0-9_]{1,64}$/.test(k) && !this.#isReservedAttr(k)) {
+              this.#attrs[k] = parsed[k];
+            }
+          }
+        }
+      }
+    } catch {}
+    // Seed attributes from explicit SDK config — anything passed in
+    // `customAttributes` should ride along on every event for audience
+    // filtering. Apply the same key regex / reserved-key / length caps used
+    // for runtime detection so we never leak garbage into event metadata.
+    if (c.customAttributes && typeof c.customAttributes === 'object') {
+      for (const k in c.customAttributes) {
+        const v = (c.customAttributes as Record<string, unknown>)[k];
+        if (v == null) continue;
+        const sv = typeof v === 'string' ? v : (typeof v === 'number' || typeof v === 'boolean' ? String(v) : null);
+        if (sv === null) continue;
+        if (!/^[a-z0-9_]{1,64}$/.test(k) || this.#isReservedAttr(k)) continue;
+        this.#attrs[k] = sv.slice(0, 255);
+      }
+      this.#persistAttrs();
+    }
     if (this.#debug) console.log('[GR Debug] SDK initialized', { projectKey: c.projectKey, apiHost: c.apiHost, userId: c.userId });
+  }
+
+  #isReservedAttr(key: string): boolean {
+    return key === 'device_type' || key === 'traffic_excluded' || key === 'attributes';
+  }
+
+  #persistAttrs(): void {
+    try {
+      sessionStorage.setItem('_ab_attrs_' + this.#pk(), JSON.stringify(this.#attrs));
+    } catch {}
+  }
+
+  // Public + internal entry point. Stores the value in metadata.attributes so
+  // every subsequent event carries it for audience-based filtering. Reserved
+  // keys are silently dropped to prevent collisions with built-in metadata.
+  // Numbers and booleans are coerced to string (matching customAttributes
+  // initialization), so callers can pass `setAttribute('plan', 1)` or
+  // `setAttribute('paying', true)` without manual stringification.
+  #applyAttribute(key: string, value: unknown): void {
+    if (!key || !/^[a-z0-9_]{1,64}$/.test(key) || this.#isReservedAttr(key)) return;
+    let stringValue: string;
+    if (typeof value === 'string') {
+      stringValue = value;
+    } else if (typeof value === 'number' && Number.isFinite(value)) {
+      stringValue = String(value);
+    } else if (typeof value === 'boolean') {
+      stringValue = value ? 'true' : 'false';
+    } else {
+      return;
+    }
+    const v = stringValue.slice(0, 255);
+    if (this.#attrs[key] === v) return;
+    this.#attrs[key] = v;
+    this.#persistAttrs();
+    this.#dbg('Audience attribute set:', key, '=', v);
   }
 
   #dbg(...args: unknown[]): void { if (this.#debug) console.log('[GR Debug]', ...args); }
@@ -465,7 +544,7 @@ export class GrowthRoadmaps {
       const pk = this.#pk();
       const cc = getCachedConfig(pk);
       const useCached = cc && isCacheFresh(cc);
-      if (useCached) { this.#e = cc.experiments; this.#p = cc.project || null; this.#hc = cc.heatmapConfigs || []; this.#fac = cc.formAnalyticsConfigs || []; }
+      if (useCached) { this.#e = cc.experiments; this.#p = cc.project || null; this.#hc = cc.heatmapConfigs || []; this.#fac = cc.formAnalyticsConfigs || []; this.#aud = cc.audiences || []; }
       try {
         const r = await fetch(this.#c.apiHost + '/api/ab/experiments/all-configs?pk=' + encodeURIComponent(pk));
         if (!r.ok) throw 0;
@@ -477,8 +556,9 @@ export class GrowthRoadmaps {
         }
         if (d.heatmapConfigs) this.#hc = d.heatmapConfigs;
         if (d.formAnalyticsConfigs) this.#fac = d.formAnalyticsConfigs;
-        setCachedConfig(pk, { experiments: this.#e, project: this.#p || undefined, heatmapConfigs: this.#hc, formAnalyticsConfigs: this.#fac, timestamp: Date.now() });
-      } catch { if (!useCached) { this.#e = cc ? cc.experiments : []; this.#p = cc?.project || null; this.#hc = cc?.heatmapConfigs || []; this.#fac = cc?.formAnalyticsConfigs || []; } }
+        if (Array.isArray(d.audiences)) this.#aud = d.audiences as AudienceAttributeConfig[];
+        setCachedConfig(pk, { experiments: this.#e, project: this.#p || undefined, heatmapConfigs: this.#hc, formAnalyticsConfigs: this.#fac, audiences: this.#aud, timestamp: Date.now() });
+      } catch { if (!useCached) { this.#e = cc ? cc.experiments : []; this.#p = cc?.project || null; this.#hc = cc?.heatmapConfigs || []; this.#fac = cc?.formAnalyticsConfigs || []; this.#aud = cc?.audiences || []; } }
     } catch { this.#e = []; } finally {
       const running = this.#e.filter(x => x.status === 'running');
       this.#dbg('Config loaded:', running.length, 'running experiments', running.map(x => x.name));
@@ -495,6 +575,10 @@ export class GrowthRoadmaps {
             this.#dbg('Restored assignment:', eName, '→', v.name);
           }
         }
+        // Audience detection installs first so that any matching url_match
+        // attribute on the current page is set BEFORE the exposure event
+        // fires inside #applyClientExperiments / first getVariant() call.
+        this.#audSetup();
         this.#goals(); this.#route(); this.#applyClientExperiments();
       }
       if (!this.#pv && this.#c.heatmaps && this.#p?.heatmaps_enabled !== false) {
@@ -554,6 +638,108 @@ export class GrowthRoadmaps {
     this.#pendingEvents = [];
     if (D) D.cookie = '_ab_vid=;path=/;max-age=0;SameSite=Lax';
     this.#b.destroy();
+  }
+
+  // Wires up project-level audience attribute detection: url_match rules
+  // fire on initial page + every SPA navigation; element_click + form_submit
+  // attach delegated listeners that set the attribute when triggered.
+  #audSetup(): void {
+    for (const c of this.#audCl) c();
+    this.#audCl = [];
+    this.#audFired.clear();
+    if (!W || !this.#aud.length) return;
+
+    // URL match rules — evaluate against current href right away.
+    this.#audUrlScan();
+
+    if (!D) return;
+
+    const clickRules = this.#aud.filter(a => a.source_type === 'click' && a.value);
+    if (clickRules.length) {
+      const handler = (ev: Event) => {
+        const t = ev.target;
+        if (!(t instanceof Element)) return;
+        for (const r of clickRules) {
+          const k = 'click::' + r.id;
+          if (this.#audFired.has(k)) continue;
+          let matched = false;
+          try { matched = !!r.value && !!t.closest(r.value); } catch { matched = false; }
+          if (matched) {
+            this.#audFired.add(k);
+            this.#applyAttribute(r.attribute_key, r.set_value || 'yes');
+          }
+        }
+      };
+      D.addEventListener('click', handler, true);
+      this.#audCl.push(() => D!.removeEventListener('click', handler, true));
+    }
+
+    // Selector mode requires a CSS selector value; URL/action_url mode
+    // treats an empty value as "match all forms" (mirrors the goals
+    // form_submit semantics and matches what the API/UI promise users).
+    const formRules = this.#aud.filter(a =>
+      a.source_type === 'form_submit' &&
+      (a.url_match_type === 'selector' ? !!a.value : true)
+    );
+    if (formRules.length) {
+      // Two match modes for form_submit:
+      //  - url_match_type === 'selector' → CSS selector against the form
+      //  - any other url_match_type      → URL match against form.action,
+      //    using the same urlMatch() helper as url_match audiences (so
+      //    contains/equals/starts_with/ends_with/regex all work uniformly).
+      //    An empty value in this mode means "match all submits".
+      const checkForm = (form: HTMLFormElement) => {
+        for (const r of formRules) {
+          const k = 'form::' + r.id;
+          if (this.#audFired.has(k)) continue;
+          let matched = false;
+          const mt = r.url_match_type || 'selector';
+          try {
+            if (mt === 'selector') {
+              matched = !!r.value && (form.matches(r.value) || !!form.closest(r.value));
+            } else if (!r.value) {
+              matched = true;
+            } else {
+              const action = form.getAttribute('action') || (W ? W.location.href : '');
+              // Resolve relative actions against the current document.
+              let resolved = action;
+              try { resolved = new URL(action, W ? W.location.href : undefined).href; } catch {}
+              matched = urlMatch(resolved, mt, r.value);
+            }
+          } catch { matched = false; }
+          if (matched) {
+            this.#audFired.add(k);
+            this.#applyAttribute(r.attribute_key, r.set_value || 'yes');
+          }
+        }
+      };
+      const submitHandler = (ev: Event) => {
+        const form = ev.target;
+        if (form instanceof HTMLFormElement) checkForm(form);
+      };
+      D.addEventListener('submit', submitHandler, true);
+      this.#audCl.push(() => D!.removeEventListener('submit', submitHandler, true));
+    }
+  }
+
+  // Re-run url_match audience detection (called on initial setup + SPA
+  // navigations). Reserved keys are filtered out at config time but we
+  // double-check via #applyAttribute.
+  #audUrlScan(): void {
+    if (!W || !this.#aud.length) return;
+    const url = W.location.href;
+    for (const r of this.#aud) {
+      if (r.source_type !== 'url_match' || !r.value) continue;
+      const k = 'url::' + r.id + '::' + url;
+      if (this.#audFired.has(k)) continue;
+      const matchType = r.url_match_type || 'contains';
+      let matched = false;
+      try { matched = urlMatch(url, matchType, r.value); } catch { matched = false; }
+      if (matched) {
+        this.#audFired.add(k);
+        this.#applyAttribute(r.attribute_key, r.set_value || 'yes');
+      }
+    }
   }
 
   #goals(): void {
@@ -673,7 +859,7 @@ export class GrowthRoadmaps {
     if (!this.#seen.has(e.id)) {
       this.#seen.add(e.id);
       this.#exposedAt.set(e.id, Date.now());
-      this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined));
+      this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined, this.#attrs));
       this.#dbg('Exposure event sent:', name, '→', v.name);
       if (this.#sv) this.#sv.onExposure();
     }
@@ -700,7 +886,7 @@ export class GrowthRoadmaps {
       const matchedGoal = e.goals?.find(g => g.goal_type === 'custom' && (g.label === goal || g.value === goal));
       if (!matchedGoal) { this.#dbg('track() SKIPPED:', e.name, '— no matching custom goal for', goal); continue; }
       this.#dbg('Conversion sent (track):', e.name, '→', v.name, 'goal:', goal);
-      this.#pushEvent(mkConv(e.id, v.id, u, this.#c.sessionId, goal, o?.value, o?.metadata));
+      this.#pushEvent(mkConv(e.id, v.id, u, this.#c.sessionId, goal, o?.value, o?.metadata, this.#attrs));
       if (this.#sv) this.#sv.onConversion(e.id, matchedGoal.id);
       sent++;
     }
@@ -715,7 +901,7 @@ export class GrowthRoadmaps {
     const v = e && this.#a.get(e.id);
     if (!e || !v) { this.#dbg('trackFor() SKIPPED:', en, 'goal:', gn, '— no assignment found', e ? '(experiment exists but no variant assigned)' : '(experiment not found)'); return; }
     this.#dbg('Conversion sent (trackFor):', en, '→', v.name, 'goal:', gn);
-    this.#pushEvent(mkConv(e.id, v.id, u, this.#c.sessionId, gn, o?.value));
+    this.#pushEvent(mkConv(e.id, v.id, u, this.#c.sessionId, gn, o?.value, undefined, this.#attrs));
     const matchedGoal = e.goals?.find(g => goalKey(g) === gn);
     if (matchedGoal && this.#sv) this.#sv.onConversion(e.id, matchedGoal.id);
   }
@@ -755,7 +941,7 @@ export class GrowthRoadmaps {
       if (!this.#seen.has(e.id)) {
         this.#seen.add(e.id);
         this.#exposedAt.set(e.id, Date.now());
-        this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined));
+        this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined, this.#attrs));
         this.#dbg('Exposure event sent:', e.name, '→', v.name);
         if (this.#sv) this.#sv.onExposure();
       }
@@ -801,6 +987,7 @@ export class GrowthRoadmaps {
     this.#lu = u;
     if (this.#ht) this.#ht.pageChanged();
     if (this.#ft) this.#ft.pageChanged();
+    this.#audUrlScan();
     this.#allUrlGoals();
     this.#reeval();
     if (this.#sv) this.#sv.onRouteChange();
@@ -853,8 +1040,21 @@ export class GrowthRoadmaps {
     if (this.#sv) this.#sv.setUserId(id);
   }
 
-  setAttribute(key: string, value: string): void {
-    if (this.#sv) this.#sv.setAttribute(key, value);
+  setAttribute(key: string, value: string | number | boolean): void {
+    // Survey widget historically expected strings; coerce there too so
+    // both sinks see the same canonical value.
+    const coerced =
+      typeof value === 'string'
+        ? value
+        : typeof value === 'number' && Number.isFinite(value)
+          ? String(value)
+          : typeof value === 'boolean'
+            ? (value ? 'true' : 'false')
+            : '';
+    if (this.#sv) this.#sv.setAttribute(key, coerced);
+    // Mirror into AB audience attributes so manually-set values can also
+    // slice results. Reserved keys are dropped inside #applyAttribute.
+    this.#applyAttribute(key, value);
   }
 
   setEmail(email: string): void {
@@ -867,6 +1067,8 @@ export class GrowthRoadmaps {
     this.#b.destroy();
     for (const c of this.#cl) c();
     this.#cl = [];
+    for (const c of this.#audCl) c();
+    this.#audCl = [];
     if (this.#rc) { this.#rc(); this.#rc = null; }
   }
 }

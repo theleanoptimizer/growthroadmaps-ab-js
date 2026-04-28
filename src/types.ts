@@ -136,11 +136,22 @@ export interface ProjectInfo {
   surveys_enabled?: boolean;
 }
 
+export interface AudienceAttributeConfig {
+  id: string;
+  attribute_key: string;
+  label: string;
+  source_type: 'manual' | 'click' | 'url_match' | 'form_submit';
+  value: string | null;
+  url_match_type: string | null;
+  set_value: string;
+}
+
 export interface CachedConfig {
   experiments: ExperimentConfig[];
   project?: ProjectInfo;
   heatmapConfigs?: Array<{ capture_mode: string; url_rules: HeatmapUrlRule[] }>;
   formAnalyticsConfigs?: Array<{ capture_mode: string; url_rules: HeatmapUrlRule[]; form_selectors?: string[] }>;
+  audiences?: AudienceAttributeConfig[];
   timestamp: number;
 }
 
@@ -200,6 +211,9 @@ export interface SurveyQuestion {
   dismissible?: boolean;
   consentLabel?: string;
   logic?: SurveyLogicRule[];
+  // Conditional rendering — when set, the question is skipped during navigation
+  // unless the referenced earlier question's answer matches `equals`.
+  showIf?: { questionId: string; equals: string | string[] };
 }
 
 export interface SurveyWelcomeCard {

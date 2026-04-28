@@ -302,6 +302,34 @@ export function renderSurveyWidget(survey: SurveyData, apiHost: string, userId: 
     }).catch(function() {});
   }
 
+  // Conditional rendering — a question is visible only when its `showIf`
+  // predicate matches an earlier answer. Used by the exit-intent
+  // "purpose of visit" template (Q3 shown only when Q2 = "No").
+  function isQuestionVisible(q: SurveyQuestion): boolean {
+    if (!q || !q.showIf || !q.showIf.questionId) return true;
+    const target = answers[q.showIf.questionId];
+    if (target == null || target === '') return false;
+    const eq = q.showIf.equals;
+    if (Array.isArray(eq)) {
+      if (Array.isArray(target)) return eq.some(v => target.indexOf(v) !== -1);
+      return eq.indexOf(String(target)) !== -1;
+    }
+    if (Array.isArray(target)) return target.indexOf(String(eq)) !== -1;
+    return String(target) === String(eq);
+  }
+
+  function nextVisibleStep(from: number): number {
+    let i = from;
+    while (i < questions.length && !isQuestionVisible(questions[i])) i++;
+    return i;
+  }
+
+  function prevVisibleStep(from: number): number {
+    let i = from;
+    while (i >= 0 && !isQuestionVisible(questions[i])) i--;
+    return i;
+  }
+
   function goNext(): void {
     const q = questions[currentStep];
     if (q && q.required) {
@@ -313,10 +341,10 @@ export function renderSurveyWidget(survey: SurveyData, apiHost: string, userId: 
       if (dest === 'end') { submitResponse(); currentStep = questions.length; render(); return; }
       if (dest) {
         const idx = questions.findIndex(x => x.id === dest);
-        if (idx !== -1) { currentStep = idx; render(); return; }
+        if (idx !== -1) { currentStep = nextVisibleStep(idx); render(); return; }
       }
     }
-    currentStep++;
+    currentStep = nextVisibleStep(currentStep + 1);
     if (currentStep >= questions.length) { submitResponse(); }
     render();
   }
@@ -328,7 +356,7 @@ export function renderSurveyWidget(survey: SurveyData, apiHost: string, userId: 
         const action = (e.currentTarget as Element).getAttribute('data-action');
         if (action === 'close') { dismissWidget(false); }
         if (action === 'start') { currentStep = 0; render(); }
-        if (action === 'back') { currentStep = Math.max(0, currentStep - 1); render(); }
+        if (action === 'back') { currentStep = Math.max(0, prevVisibleStep(currentStep - 1)); render(); }
         if (action === 'next') { goNext(); }
       });
     });
