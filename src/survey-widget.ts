@@ -111,9 +111,17 @@ function getStyles(styling: SurveyData['styling']): string {
     '.gs-progress-bar{height:100%;border-radius:2px;background:' + brandColor + ';transition:width .3s;}' +
     '.gs-progress-counter{font-size:11px;color:#9ca3af;margin-top:8px;text-align:center;}' +
     '.gs-nav{display:flex;justify-content:space-between;align-items:center;margin-top:16px;}' +
-    '.gs-rating{display:flex;gap:4px;justify-content:center;margin:8px 0;}' +
-    '.gs-rating-item{width:36px;height:36px;border-radius:50%;border:2px solid #d1d5db;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:13px;font-weight:500;transition:all .15s;}' +
-    '.gs-rating-item:hover,.gs-rating-item.selected{border-color:' + brandColor + ';background:' + brandColor + ';color:#fff;}' +
+    '.gs-rating{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:8px 0;}' +
+    '.gs-rating-num{width:40px;height:40px;border-radius:8px;border:2px solid #d1d5db;background:transparent;color:' + textColor + ';display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:14px;font-weight:600;transition:all .15s;}' +
+    '.gs-rating-num:hover{border-color:' + brandColor + ';}' +
+    '.gs-rating-num.selected{border-color:' + brandColor + ';background:' + brandColor + ';color:#fff;}' +
+    '.gs-rating-smiley{background:none;border:0;padding:4px;border-radius:6px;font-size:24px;line-height:1;cursor:pointer;transition:transform .15s;}' +
+    '.gs-rating-smiley:hover{transform:scale(1.1);}' +
+    '.gs-rating-smiley.selected{background:#f3f4f6;}' +
+    '.gs-star{width:32px;height:32px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;background:none;border:0;padding:2px;transition:transform .15s;}' +
+    '.gs-star:hover{transform:scale(1.1);}' +
+    '.gs-star svg{width:28px;height:28px;fill:transparent;stroke:#d1d5db;stroke-width:2;stroke-linejoin:round;stroke-linecap:round;}' +
+    '.gs-star.selected svg{fill:' + brandColor + ';stroke:' + brandColor + ';}' +
     '.gs-nps{display:flex;gap:3px;justify-content:center;flex-wrap:wrap;margin:8px 0;}' +
     '.gs-nps-item{width:30px;height:30px;border:1px solid #d1d5db;border-radius:4px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:12px;font-weight:500;transition:all .15s;}' +
     '.gs-nps-item:hover,.gs-nps-item.selected{border-color:' + brandColor + ';background:' + brandColor + ';color:#fff;}' +
@@ -161,13 +169,25 @@ function renderQuestion(q: SurveyQuestion, step: number, answers: Record<string,
       });
       break;
     }
-    case 'rating':
+    case 'rating': {
+      const shape = q.ratingShape || 'star';
       html += '<div class="gs-rating">';
+      const starSvg = '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+      const smileys = ['😞','😕','😐','🙂','😃','🤩','😍','🥳','🌟','💯'];
       for (let i = 1; i <= (q.ratingScale || 5); i++) {
-        const sel = answer === i ? ' selected' : '';
-        html += '<div class="gs-rating-item' + sel + '" data-qid="' + q.id + '" data-value="' + i + '">' + (q.ratingShape === 'smiley' ? ['😞','😐','🙂','😊','🤩'][Math.min(i-1,4)] : i) + '</div>';
+        if (shape === 'star') {
+          const selected = typeof answer === 'number' && i <= answer;
+          html += '<button type="button" class="gs-star' + (selected ? ' selected' : '') + '" data-qid="' + q.id + '" data-value="' + i + '">' + starSvg + '</button>';
+        } else if (shape === 'smiley') {
+          const isActive = typeof answer === 'number' && i <= answer;
+          html += '<button type="button" class="gs-rating-smiley' + (isActive ? ' selected' : '') + '" data-qid="' + q.id + '" data-value="' + i + '">' + smileys[Math.min(i-1, smileys.length-1)] + '</button>';
+        } else {
+          const isActive = typeof answer === 'number' && i <= answer;
+          html += '<button type="button" class="gs-rating-num' + (isActive ? ' selected' : '') + '" data-qid="' + q.id + '" data-value="' + i + '">' + i + '</button>';
+        }
       }
       html += '</div>';
+    }
       if (q.lowLabel || q.highLabel) html += '<div class="gs-labels"><span>' + escapeHtml(q.lowLabel || '') + '</span><span>' + escapeHtml(q.highLabel || '') + '</span></div>';
       break;
     case 'nps':
@@ -378,7 +398,7 @@ export function renderSurveyWidget(survey: SurveyData, apiHost: string, userId: 
         render();
       });
     });
-    root.querySelectorAll('.gs-rating-item, .gs-nps-item').forEach(el => {
+    root.querySelectorAll('.gs-rating-num, .gs-rating-smiley, .gs-nps-item, .gs-star').forEach(el => {
       el.addEventListener('click', (e: Event) => {
         const qid = (e.currentTarget as Element).getAttribute('data-qid')!;
         answers[qid] = Number((e.currentTarget as Element).getAttribute('data-value'));
@@ -386,7 +406,7 @@ export function renderSurveyWidget(survey: SurveyData, apiHost: string, userId: 
       });
     });
     root.querySelectorAll('[data-qid][data-value="clicked"], [data-qid][data-value="dismissed"]').forEach(el => {
-      if ((el as Element).classList.contains('gs-option') || (el as Element).classList.contains('gs-rating-item') || (el as Element).classList.contains('gs-nps-item')) return;
+      if ((el as Element).classList.contains('gs-option') || (el as Element).classList.contains('gs-rating-num') || (el as Element).classList.contains('gs-rating-smiley') || (el as Element).classList.contains('gs-nps-item')) return;
       el.addEventListener('click', (e: Event) => {
         const qid = (e.currentTarget as Element).getAttribute('data-qid')!;
         answers[qid] = (e.currentTarget as Element).getAttribute('data-value') || '';
