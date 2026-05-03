@@ -1,5 +1,45 @@
 import { ABEvent } from './types';
 
+// Task #1218 — strip metadata fields that haven't changed since the previous
+// event in the same batch. The server back-fills the dropped values from the
+// most recent event in the same payload, so analytics see identical input
+// while the wire payload shrinks (device_type/attributes/page_url are the
+// fattest repeating fields). Returns a NEW array; original events are not
+// mutated so retries serialize from the same dedup state.
+export function dedupeBatchMetadata(events: ABEvent[]): ABEvent[] {
+  let lastDevice: string | undefined;
+  let lastAttrsJson: string | undefined;
+  let lastUrl: string | undefined;
+  return events.map(evt => {
+    const md = (evt as { metadata?: Record<string, unknown> }).metadata;
+    if (!md || typeof md !== 'object') return evt;
+    const next: Record<string, unknown> = { ...md };
+    if (typeof next.device_type === 'string') {
+      if (next.device_type === lastDevice) {
+        delete next.device_type;
+      } else {
+        lastDevice = next.device_type;
+      }
+    }
+    if (next.attributes && typeof next.attributes === 'object' && !Array.isArray(next.attributes)) {
+      const j = JSON.stringify(next.attributes);
+      if (j === lastAttrsJson) {
+        delete next.attributes;
+      } else {
+        lastAttrsJson = j;
+      }
+    }
+    if (typeof next.page_url === 'string') {
+      if (next.page_url === lastUrl) {
+        delete next.page_url;
+      } else {
+        lastUrl = next.page_url;
+      }
+    }
+    return { ...evt, metadata: next } as ABEvent;
+  });
+}
+
 export class EventBatcher {
   #q: ABEvent[] = [];
   #t: ReturnType<typeof setInterval> | null = null;
@@ -29,7 +69,7 @@ export class EventBatcher {
 
   async #flush(): Promise<void> {
     if (!this.#q.length) return;
-    const evts = this.#q.splice(0);
+    const evts = dedupeBatchMetadata(this.#q.splice(0));
     if (this.#debug) console.log('[GR Debug] Flushing', evts.length, 'events', evts.map(e => e.type));
     const url = this.#h + '/api/ab/events/batch';
     const body = JSON.stringify({ events: evts });
@@ -49,7 +89,8 @@ export class EventBatcher {
 
   #beacon(): void {
     if (!this.#q.length) return;
-    try { navigator.sendBeacon(this.#h + '/api/ab/events/batch', new Blob([JSON.stringify({ events: this.#q.splice(0), clientKey: this.#k })], { type: 'application/json' })); } catch {}
+    const evts = dedupeBatchMetadata(this.#q.splice(0));
+    try { navigator.sendBeacon(this.#h + '/api/ab/events/batch', new Blob([JSON.stringify({ events: evts, clientKey: this.#k })], { type: 'application/json' })); } catch {}
   }
 
   flushBeacon(): void { this.#beacon(); }
