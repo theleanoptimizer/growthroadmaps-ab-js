@@ -2,6 +2,10 @@
   var W = window as any;
   var D = document;
 
+  // Declare the command queue as early as possible so that any inline scripts
+  // appearing before the SDK script tag can safely push commands to it.
+  W.abq = W.abq || [];
+
   var cfg = W.__gr_loader_cfg;
   if (!cfg || !cfg.pk) return;
   W.__gr_loader_ran = true;

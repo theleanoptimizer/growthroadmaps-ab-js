@@ -9,6 +9,7 @@ import {
   TargetingRule,
   ABEvent,
   AudienceAttributeConfig,
+  GrowthCommand,
 } from './types';
 import { assignVariant, fnv1a } from './hasher';
 import { getCachedConfig, setCachedConfig, isCacheFresh } from './storage';
@@ -19,6 +20,7 @@ import type { FormTracker } from './form-tracker';
 import { renderPreviewPanel, getStoredSelections, applyPanelVariant } from './preview-panel';
 import { initReviewMode } from './review-panel';
 import type { SurveyManager } from './survey';
+import type { SurveyData } from './types';
 
 interface LazyModule<T> {
   __lazyLoad?: () => Promise<T>;
@@ -279,6 +281,27 @@ function mkConv(eid: string, vid: string, uid: string, sid: string | undefined, 
   return { type: 'conversion', experiment_id: eid, variant_id: vid, user_id: uid, session_id: sid, goal_name: gn, goal_value: gv, metadata, timestamp: new Date().toISOString() } as ABEvent;
 }
 
+/**
+ * Main SDK class for Growth Roadmaps A/B testing.
+ *
+ * ## Command queue (pre-load attribute pushes)
+ *
+ * If you need to set audience attributes before the SDK script finishes
+ * loading (e.g. server-rendered user data), use the `window.abq` queue:
+ *
+ * ```html
+ * <!-- Place this BEFORE the SDK <script> tag -->
+ * <script>
+ *   window.abq = window.abq || [];
+ *   window.abq.push({ type: 'setAttribute', key: 'plan', value: 'pro' });
+ *   window.abq.push({ type: 'setAttribute', key: 'logged_in', value: 'true' });
+ * </script>
+ * ```
+ *
+ * The constructor drains every queued command on init, then replaces
+ * `window.abq` with a live proxy so subsequent `push()` calls take effect
+ * immediately without needing a reference to the SDK instance.
+ */
 export class GrowthRoadmaps {
   #c: GrowthConfig;
   #e: ExperimentConfig[] = [];
@@ -305,6 +328,7 @@ export class GrowthRoadmaps {
   #hc: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }> }> = [];
   #fac: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; form_selectors?: string[] }> = [];
   #sv: SurveyManager | null = null;
+  #surveyData: SurveyData[] = [];
   #debug = false;
   // Project-level audience attribute definitions (from /all-configs).
   #aud: AudienceAttributeConfig[] = [];
@@ -380,6 +404,32 @@ export class GrowthRoadmaps {
       }
       this.#persistAttrs();
     }
+    // Drain the pre-load command queue (window.abq) that may have been
+    // populated by inline scripts running before this SDK bundle arrived.
+    // Only 'setAttribute' commands are supported in this first pass; all
+    // other command types are silently ignored.
+    if (W && Array.isArray(W.abq)) {
+      const queued = W.abq as GrowthCommand[];
+      for (let i = 0; i < queued.length; i++) {
+        const cmd = queued[i];
+        if (cmd && cmd.type === 'setAttribute') {
+          this.setAttribute(cmd.key, cmd.value);
+        }
+      }
+    }
+    // Replace the array with a live proxy so any subsequent push() calls
+    // take effect immediately without needing a reference to the instance.
+    if (W) {
+      const self = this;
+      W.abq = {
+        push(cmd: GrowthCommand): void {
+          if (cmd && cmd.type === 'setAttribute') {
+            self.setAttribute(cmd.key, cmd.value);
+          }
+        },
+      };
+    }
+
     if (this.#debug) console.log('[GR Debug] SDK initialized', { projectKey: c.projectKey, apiHost: c.apiHost, userId: c.userId });
   }
 
@@ -544,21 +594,39 @@ export class GrowthRoadmaps {
       const pk = this.#pk();
       const cc = getCachedConfig(pk);
       const useCached = cc && isCacheFresh(cc);
-      if (useCached) { this.#e = cc.experiments; this.#p = cc.project || null; this.#hc = cc.heatmapConfigs || []; this.#fac = cc.formAnalyticsConfigs || []; this.#aud = cc.audiences || []; }
+      if (useCached) { this.#e = cc.experiments; this.#p = cc.project || null; this.#hc = cc.heatmapConfigs || []; this.#fac = cc.formAnalyticsConfigs || []; this.#aud = cc.audiences || []; this.#surveyData = cc.surveys || []; }
       try {
-        const r = await fetch(this.#c.apiHost + '/api/ab/experiments/all-configs?pk=' + encodeURIComponent(pk));
-        if (!r.ok) throw 0;
-        const d = await r.json();
-        if (d.project) this.#p = d.project;
-        if (!useCached) {
-          if (d.experiments) this.#e = Object.values(d.experiments) as ExperimentConfig[];
-          else this.#e = Array.isArray(d) ? d : Object.values(d);
-        }
-        if (d.heatmapConfigs) this.#hc = d.heatmapConfigs;
-        if (d.formAnalyticsConfigs) this.#fac = d.formAnalyticsConfigs;
-        if (Array.isArray(d.audiences)) this.#aud = d.audiences as AudienceAttributeConfig[];
-        setCachedConfig(pk, { experiments: this.#e, project: this.#p || undefined, heatmapConfigs: this.#hc, formAnalyticsConfigs: this.#fac, audiences: this.#aud, timestamp: Date.now() });
-      } catch { if (!useCached) { this.#e = cc ? cc.experiments : []; this.#p = cc?.project || null; this.#hc = cc?.heatmapConfigs || []; this.#fac = cc?.formAnalyticsConfigs || []; this.#aud = cc?.audiences || []; } }
+        const storedEtag = (() => { try { return localStorage.getItem('_ab_cfg_etag_' + pk); } catch { return null; } })();
+        const headers: Record<string, string> = {};
+        if (storedEtag) headers['If-None-Match'] = storedEtag;
+        const r = await fetch(this.#c.apiHost + '/api/sdk/config/' + encodeURIComponent(pk) + '.json', { headers });
+        if (r.status === 304) {
+          // Server confirms config is unchanged. If the local cache TTL had expired
+          // (useCached === false), state was never hydrated above — do it now from the
+          // stale cc since the server confirms it's still current. Refresh the timestamp
+          // so it's treated as fresh for the next TTL period.
+          if (!useCached && cc) {
+            this.#e = cc.experiments; this.#p = cc.project || null;
+            this.#hc = cc.heatmapConfigs || []; this.#fac = cc.formAnalyticsConfigs || [];
+            this.#aud = cc.audiences || []; this.#surveyData = cc.surveys || [];
+            setCachedConfig(pk, { ...cc, timestamp: Date.now() });
+          }
+        } else if (r.ok) {
+          const etag = r.headers.get('etag');
+          if (etag) { try { localStorage.setItem('_ab_cfg_etag_' + pk, etag); } catch {} }
+          const d = await r.json();
+          if (d.project) this.#p = d.project;
+          if (!useCached) {
+            if (d.experiments) this.#e = Object.values(d.experiments) as ExperimentConfig[];
+            else this.#e = Array.isArray(d) ? d : Object.values(d);
+          }
+          if (d.heatmapConfigs) this.#hc = d.heatmapConfigs;
+          if (d.formAnalyticsConfigs) this.#fac = d.formAnalyticsConfigs;
+          if (Array.isArray(d.audiences)) this.#aud = d.audiences as AudienceAttributeConfig[];
+          if (Array.isArray(d.surveys)) this.#surveyData = d.surveys;
+          setCachedConfig(pk, { experiments: this.#e, project: this.#p || undefined, heatmapConfigs: this.#hc, formAnalyticsConfigs: this.#fac, audiences: this.#aud, surveys: this.#surveyData, timestamp: Date.now() });
+        } else { throw 0; }
+      } catch { if (!useCached) { this.#e = cc ? cc.experiments : []; this.#p = cc?.project || null; this.#hc = cc?.heatmapConfigs || []; this.#fac = cc?.formAnalyticsConfigs || []; this.#aud = cc?.audiences || []; this.#surveyData = cc?.surveys || []; } }
     } catch { this.#e = []; } finally {
       const running = this.#e.filter(x => x.status === 'running');
       this.#dbg('Config loaded:', running.length, 'running experiments', running.map(x => x.name));
@@ -1019,7 +1087,14 @@ export class GrowthRoadmaps {
         }
         return map;
       });
-      const load = () => this.#sv!.load();
+      const surveyData = this.#surveyData;
+      const load = () => {
+        if (surveyData.length > 0) {
+          this.#sv!.loadFromData(surveyData);
+        } else {
+          this.#sv!.load();
+        }
+      };
       if (D && D.readyState === 'complete') {
         if (typeof requestIdleCallback === 'function') requestIdleCallback(load);
         else setTimeout(load, 0);

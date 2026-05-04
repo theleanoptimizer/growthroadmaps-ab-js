@@ -42,6 +42,12 @@ export class SurveyManager {
     } catch {}
   }
 
+  loadFromData(surveys: SurveyData[]): void {
+    this.#surveys = surveys || [];
+    this.#firePendingPageViews();
+    this.#checkTriggers();
+  }
+
   #pendingKey(): string {
     return '__sm_pv_' + this.#teamId;
   }

@@ -152,6 +152,7 @@ export interface CachedConfig {
   heatmapConfigs?: Array<{ capture_mode: string; url_rules: HeatmapUrlRule[] }>;
   formAnalyticsConfigs?: Array<{ capture_mode: string; url_rules: HeatmapUrlRule[]; form_selectors?: string[] }>;
   audiences?: AudienceAttributeConfig[];
+  surveys?: SurveyData[];
   timestamp: number;
 }
 
@@ -275,6 +276,22 @@ export interface SurveyData {
   meta?: Record<string, unknown>;
 }
 
+/**
+ * A command that can be pushed to the `window.abq` queue before the SDK loads.
+ * Currently only `setAttribute` is supported; unknown types are silently ignored.
+ *
+ * @example
+ * window.abq = window.abq || [];
+ * window.abq.push({ type: 'setAttribute', key: 'plan', value: 'pro' });
+ */
+export type GrowthCommand =
+  | { type: 'setAttribute'; key: string; value: string | number | boolean };
+
+/** Live proxy that replaces `window.abq` after the SDK initialises. */
+export interface GrowthCommandProxy {
+  push(command: GrowthCommand): void;
+}
+
 declare global {
   interface Window {
     __ab_reveal?: () => void;
@@ -283,5 +300,7 @@ declare global {
     GrowthRoadmaps?: typeof import('./index').GrowthRoadmaps;
     getAntiFlickerSnippet?: typeof import('./anti-flicker').getAntiFlickerSnippet;
     dataLayer?: Record<string, unknown>[];
+    /** Pre-load command queue. Push commands here before the SDK script tag. */
+    abq?: GrowthCommand[] | GrowthCommandProxy;
   }
 }
