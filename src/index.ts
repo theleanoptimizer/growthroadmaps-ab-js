@@ -599,7 +599,15 @@ export class GrowthRoadmaps {
         const storedEtag = (() => { try { return localStorage.getItem('_ab_cfg_etag_' + pk); } catch { return null; } })();
         const headers: Record<string, string> = {};
         if (storedEtag) headers['If-None-Match'] = storedEtag;
-        const r = await fetch(this.#c.apiHost + '/api/sdk/config/' + encodeURIComponent(pk) + '.json', { headers });
+        const cdnUrl = 'https://js.growthroadmaps.com/configs/' + encodeURIComponent(pk) + '.json';
+        const fallbackUrl = this.#c.apiHost + '/api/sdk/config/' + encodeURIComponent(pk) + '.json';
+        let r: Response | null = null;
+        try {
+          const cdnR = await fetch(cdnUrl, { headers });
+          if (cdnR.ok || cdnR.status === 304) { r = cdnR; } else { throw 0; }
+        } catch {
+          r = await fetch(fallbackUrl, { headers });
+        }
         if (r.status === 304) {
           // Server confirms config is unchanged. If the local cache TTL had expired
           // (useCached === false), state was never hydrated above — do it now from the
