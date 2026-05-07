@@ -149,7 +149,7 @@ export interface AudienceAttributeConfig {
 export interface CachedConfig {
   experiments: ExperimentConfig[];
   project?: ProjectInfo;
-  heatmapConfigs?: Array<{ capture_mode: string; url_rules: HeatmapUrlRule[] }>;
+  heatmapConfigs?: Array<{ capture_mode: string; url_rules: HeatmapUrlRule[]; sampling_rate?: number }>;
   formAnalyticsConfigs?: Array<{ capture_mode: string; url_rules: HeatmapUrlRule[]; form_selectors?: string[] }>;
   audiences?: AudienceAttributeConfig[];
   surveys?: SurveyData[];

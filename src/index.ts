@@ -325,7 +325,7 @@ export class GrowthRoadmaps {
   #pendingEvents: ABEvent[] = [];
   #ht: HeatmapTracker | null = null;
   #ft: FormTracker | null = null;
-  #hc: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }> }> = [];
+  #hc: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; sampling_rate?: number }> = [];
   #fac: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; form_selectors?: string[] }> = [];
   #sv: SurveyManager | null = null;
   #surveyData: SurveyData[] = [];
@@ -470,11 +470,11 @@ export class GrowthRoadmaps {
 
   #dbg(...args: unknown[]): void { if (this.#debug) console.log('[GR Debug]', ...args); }
 
-  async #initHeatmap(urlRuleSets: Array<Array<{ match_type: string; value: string }>>, trackAllPages: boolean): Promise<void> {
+  async #initHeatmap(urlRuleSets: Array<Array<{ match_type: string; value: string }>>, trackAllPages: boolean, samplingRate = 1.0): Promise<void> {
     if (!D || (urlRuleSets.length === 0 && !trackAllPages)) return;
     const mod = await import('./heatmap') as HeatmapModule & LazyModule<HeatmapModule>;
     const resolved = typeof mod.__lazyLoad === 'function' ? await mod.__lazyLoad() : mod;
-    this.#ht = new resolved.HeatmapTracker(this.#b, this.#c.userId || this.#c.sessionId || '', this.#c.sessionId, () => this.#consent, urlRuleSets, trackAllPages);
+    this.#ht = new resolved.HeatmapTracker(this.#b, this.#c.userId || this.#c.sessionId || '', this.#c.sessionId, () => this.#consent, urlRuleSets, trackAllPages, samplingRate);
     // Backfill variant ID: getVariant() / #applyClientExperiments() may have run before
     // this async module finished loading, so this.#ht was null when setVariantId was called.
     if (this.#a.size > 0) {
@@ -661,9 +661,11 @@ export class GrowthRoadmaps {
         const hasAllPages = this.#p?.heatmap_all_pages_enabled === true;
         const hasAllForms = this.#p?.form_analytics_all_forms_enabled === true;
         const ruleSets = this.#hc.map(c => c.url_rules || []);
+        const rates = this.#hc.map(c => typeof c.sampling_rate === 'number' ? c.sampling_rate : 1.0);
+        const effectiveSamplingRate = rates.length > 0 ? Math.min(...rates) : 1.0;
 
         if (ruleSets.length > 0 || hasAllPages) {
-          this.#initHeatmap(ruleSets, hasAllPages);
+          this.#initHeatmap(ruleSets, hasAllPages, effectiveSamplingRate);
         }
 
         if (this.#fac.length > 0 || hasAllForms) {

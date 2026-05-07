@@ -73,6 +73,7 @@ export class HeatmapTracker {
   #compiledRuleSets: CompiledUrlRule[][];
   #tracking = false;
   #trackAllPages: boolean;
+  #samplingRate: number;
 
   constructor(
     batcher: EventBatcher,
@@ -81,6 +82,7 @@ export class HeatmapTracker {
     consentCheck: () => boolean,
     urlRuleSets: Array<Array<HeatmapUrlRule>>,
     trackAllPages = false,
+    samplingRate = 1.0,
   ) {
     this.#batcher = batcher;
     this.#userId = userId;
@@ -88,6 +90,7 @@ export class HeatmapTracker {
     this.#consent = consentCheck;
     this.#currentPageUrl = window.location.href;
     this.#trackAllPages = trackAllPages;
+    this.#samplingRate = samplingRate;
 
     this.#compiledRuleSets = urlRuleSets.map(ruleSet =>
       ruleSet.map(rule => {
@@ -125,6 +128,7 @@ export class HeatmapTracker {
 
   #push(e: HeatmapClickEvent | HeatmapScrollEvent): void {
     if (!this.#consent()) return;
+    if (Math.random() > this.#samplingRate) return;
     this.#batcher.push(e);
   }
 
