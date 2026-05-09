@@ -920,6 +920,7 @@ export class GrowthRoadmaps {
     if (this.#ft) this.#ft.setVariantId(v.id);
     if (e.mode === 'client') { addCss(v, e.id, this.#sm); if (this.#c.mutationObserver === false || !v.selectors?.length || selectorMatchesNow(v.selectors)) this.#runVariantJs(v); }
     if (e.mode === 'redirect' && !ex && !v.is_control && v.redirect_url) {
+      if (!W) return fb;
       // Check URL params for loop protection (visitor already arrived at destination page via redirect)
       const sp = new URLSearchParams(W.location.search);
       const lpExp = sp.get('_ab_exp'), lpVar = sp.get('_ab_var');
