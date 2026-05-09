@@ -63,9 +63,24 @@ function createLazyPlugin(moduleName, globalVar) {
     },
   };
 }
-const lazyHeatmapPlugin = createLazyPlugin("heatmap", "__grHeatmap");
-const lazySurveyPlugin = createLazyPlugin("survey", "__grSurvey");
-const lazySurveyWidgetPlugin = createLazyPlugin("survey-widget", "__grSurveyWidget");
+
+const lazyHeatmapPlugin      = createLazyPlugin("heatmap",       "__grHeatmap");
+const lazySurveyPlugin        = createLazyPlugin("survey",        "__grSurvey");
+const lazySurveyWidgetPlugin  = createLazyPlugin("survey-widget", "__grSurveyWidget");
+const lazyPanelsPlugin        = createLazyPlugin("panels",        "__grPanels");
+const lazyGoalsPlugin         = createLazyPlugin("goals",         "__grGoals");
+const lazyAudiencePlugin      = createLazyPlugin("audience",      "__grAudience");
+const lazyFormTrackerPlugin   = createLazyPlugin("form-tracker",  "__grFormTracker");
+
+const corePlugins = [
+  lazyHeatmapPlugin,
+  lazySurveyPlugin,
+  lazySurveyWidgetPlugin,
+  lazyPanelsPlugin,
+  lazyGoalsPlugin,
+  lazyAudiencePlugin,
+  lazyFormTrackerPlugin,
+];
 
 const sharedOptions = {
   entryPoints: ["src/index.ts"],
@@ -73,6 +88,15 @@ const sharedOptions = {
   platform: "browser",
   target: "es2022",
   treeShaking: true,
+};
+
+const minifyOptions = {
+  minify: true,
+  minifyWhitespace: true,
+  minifyIdentifiers: true,
+  minifySyntax: true,
+  legalComments: "none",
+  drop: ["debugger"],
 };
 
 async function build() {
@@ -87,26 +111,67 @@ async function build() {
     format: "iife",
     globalName: "GrowthRoadmapsSDK",
     outfile: "dist/growth.umd.js",
-    plugins: [lazyHeatmapPlugin, lazySurveyPlugin, lazySurveyWidgetPlugin, umdWrapper],
+    plugins: [...corePlugins, umdWrapper],
   });
 
   const minResult = await esbuild.build({
     ...sharedOptions,
+    ...minifyOptions,
     format: "iife",
     globalName: "GrowthRoadmapsSDK",
-    minify: true,
-    minifyWhitespace: true,
-    minifyIdentifiers: true,
-    minifySyntax: true,
-    legalComments: "none",
-    drop: ["debugger"],
     outfile: "dist/growth.min.js",
-    plugins: [lazyHeatmapPlugin, lazySurveyPlugin, lazySurveyWidgetPlugin, umdWrapper],
+    plugins: [...corePlugins, umdWrapper],
     metafile: true,
   });
 
   console.log("\n--- Core Bundle Analysis ---");
   console.log(await esbuild.analyzeMetafile(minResult.metafile));
+
+  // --- Lazy chunk builds ---
+
+  await esbuild.build({
+    entryPoints: ["src/panels.ts"],
+    bundle: true,
+    platform: "browser",
+    target: "es2022",
+    format: "iife",
+    globalName: "__grPanels",
+    ...minifyOptions,
+    outfile: "dist/panels.min.js",
+  });
+
+  await esbuild.build({
+    entryPoints: ["src/goals.ts"],
+    bundle: true,
+    platform: "browser",
+    target: "es2022",
+    format: "iife",
+    globalName: "__grGoals",
+    ...minifyOptions,
+    outfile: "dist/goals.min.js",
+  });
+
+  await esbuild.build({
+    entryPoints: ["src/audience.ts"],
+    bundle: true,
+    platform: "browser",
+    target: "es2022",
+    format: "iife",
+    globalName: "__grAudience",
+    ...minifyOptions,
+    outfile: "dist/audience.min.js",
+  });
+
+  await esbuild.build({
+    entryPoints: ["src/form-tracker.ts"],
+    bundle: true,
+    platform: "browser",
+    target: "es2022",
+    format: "iife",
+    globalName: "__grFormTracker",
+    ...minifyOptions,
+    outfile: "dist/form-tracker.min.js",
+  });
 
   await esbuild.build({
     entryPoints: ["src/heatmap.ts"],
@@ -115,11 +180,7 @@ async function build() {
     target: "es2022",
     format: "iife",
     globalName: "__grHeatmap",
-    minify: true,
-    minifyWhitespace: true,
-    minifyIdentifiers: true,
-    minifySyntax: true,
-    legalComments: "none",
+    ...minifyOptions,
     outfile: "dist/heatmap.min.js",
   });
 
@@ -130,11 +191,7 @@ async function build() {
     target: "es2022",
     format: "iife",
     globalName: "__grSurvey",
-    minify: true,
-    minifyWhitespace: true,
-    minifyIdentifiers: true,
-    minifySyntax: true,
-    legalComments: "none",
+    ...minifyOptions,
     outfile: "dist/survey.min.js",
     plugins: [lazySurveyWidgetPlugin],
   });
@@ -146,11 +203,7 @@ async function build() {
     target: "es2022",
     format: "iife",
     globalName: "__grSurveyWidget",
-    minify: true,
-    minifyWhitespace: true,
-    minifyIdentifiers: true,
-    minifySyntax: true,
-    legalComments: "none",
+    ...minifyOptions,
     outfile: "dist/survey-widget.min.js",
   });
 
@@ -162,41 +215,56 @@ async function build() {
     platform: "browser",
     target: "es2022",
     format: "iife",
-    minify: true,
-    minifyWhitespace: true,
-    minifyIdentifiers: true,
-    minifySyntax: true,
-    legalComments: "none",
-    drop: ["debugger"],
+    ...minifyOptions,
     outfile: "dist/growth-loader.min.js",
     metafile: true,
   });
 
-  const minified = fs.statSync("dist/growth.min.js");
-  const sizeKB = (minified.size / 1024).toFixed(2);
+  // --- Size report ---
+  const raw = fs.statSync("dist/growth.min.js").size;
+  const gz = Number(execSync(`gzip -9 < dist/growth.min.js | wc -c`).toString().trim());
+  const sizeKB = (raw / 1024).toFixed(2);
+  const gzKB   = (gz  / 1024).toFixed(2);
+
   const loaderFile = fs.statSync("dist/growth-loader.min.js");
   const loaderSizeKB = (loaderFile.size / 1024).toFixed(2);
   const surveyFile = fs.statSync("dist/survey.min.js");
   const surveySizeKB = (surveyFile.size / 1024).toFixed(2);
   const surveyWidgetFile = fs.statSync("dist/survey-widget.min.js");
   const surveyWidgetSizeKB = (surveyWidgetFile.size / 1024).toFixed(2);
-  console.log("\nBuild complete!");
-  console.log("  dist/growth.esm.js");
-  console.log("  dist/growth.umd.js");
   const heatmapFile = fs.statSync("dist/heatmap.min.js");
   const heatmapSizeKB = (heatmapFile.size / 1024).toFixed(2);
-  console.log("  dist/growth.min.js (" + sizeKB + " KB) — core bundle");
-  console.log("  dist/growth-loader.min.js (" + loaderSizeKB + " KB)");
-  console.log("  dist/heatmap.min.js (" + heatmapSizeKB + " KB) — lazy loaded");
-  console.log("  dist/survey.min.js (" + surveySizeKB + " KB) — lazy loaded");
-  console.log("  dist/survey-widget.min.js (" + surveyWidgetSizeKB + " KB) — lazy loaded");
+  const panelsFile = fs.statSync("dist/panels.min.js");
+  const panelsSizeKB = (panelsFile.size / 1024).toFixed(2);
+  const goalsFile = fs.statSync("dist/goals.min.js");
+  const goalsSizeKB = (goalsFile.size / 1024).toFixed(2);
+  const audFile = fs.statSync("dist/audience.min.js");
+  const audSizeKB = (audFile.size / 1024).toFixed(2);
+  const ftFile = fs.statSync("dist/form-tracker.min.js");
+  const ftSizeKB = (ftFile.size / 1024).toFixed(2);
+
+  console.log("\nBuild complete!");
+  console.log("  dist/growth.min.js       " + sizeKB + " KB raw / " + gzKB + " KB gzip — core bundle");
+  console.log("  dist/growth-loader.min.js " + loaderSizeKB + " KB");
+  console.log("  dist/panels.min.js       " + panelsSizeKB + " KB — lazy chunk");
+  console.log("  dist/goals.min.js        " + goalsSizeKB + " KB — lazy chunk");
+  console.log("  dist/audience.min.js     " + audSizeKB + " KB — lazy chunk");
+  console.log("  dist/form-tracker.min.js " + ftSizeKB + " KB — lazy chunk");
+  console.log("  dist/heatmap.min.js      " + heatmapSizeKB + " KB — lazy chunk");
+  console.log("  dist/survey.min.js       " + surveySizeKB + " KB — lazy chunk");
+  console.log("  dist/survey-widget.min.js " + surveyWidgetSizeKB + " KB — lazy chunk");
+  console.log("  dist/growth.esm.js");
+  console.log("  dist/growth.umd.js");
   console.log("  dist/index.d.ts");
 
-  if (minified.size > 16384) {
+  // Gzip budget: core bundle (growth.min.js) must stay under 10 KB.
+  // Baseline: ~70 KB raw / 20,924 bytes gzip. Current: ~31 KB raw / ~9.1 KB gzip.
+  const GZ_BUDGET = 10240;
+  if (gz > GZ_BUDGET) {
     console.error(
-      "\nWARNING: Minified core bundle is " + sizeKB + " KB (exceeds 16 KB limit)",
+      "\nERROR: Core bundle gzipped size is " + gz + " bytes (" + gzKB + " KB) — exceeds " + GZ_BUDGET + " byte budget!"
     );
-    process.exit(0);
+    process.exit(1);
   }
 
   if (loaderFile.size > 2048) {

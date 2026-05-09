@@ -17,10 +17,10 @@ import { EventBatcher } from './batcher';
 import { getAntiFlickerSnippet, revealPage } from './anti-flicker';
 import type { HeatmapTracker } from './heatmap';
 import type { FormTracker } from './form-tracker';
-import { renderPreviewPanel, getStoredSelections, applyPanelVariant } from './preview-panel';
-import { initReviewMode } from './review-panel';
 import type { SurveyManager } from './survey';
 import type { SurveyData } from './types';
+import type { setupGoals as _setupGoals, checkUrlGoals as _checkUrlGoals, GoalContext } from './goals';
+import type { setupAudience as _setupAudience, AudienceContext } from './audience';
 
 interface LazyModule<T> {
   __lazyLoad?: () => Promise<T>;
@@ -29,6 +29,15 @@ interface LazyModule<T> {
 type HeatmapModule = { HeatmapTracker: typeof HeatmapTracker };
 type FormTrackerModule = { FormTracker: typeof FormTracker };
 type SurveyModule = { SurveyManager: typeof SurveyManager };
+type GoalsModule = { setupGoals: typeof _setupGoals; checkUrlGoals: typeof _checkUrlGoals };
+type AudienceModule = { setupAudience: typeof _setupAudience };
+type PanelsResolvedModule = {
+  renderPreviewPanel: (c: unknown) => void;
+  getStoredSelections: () => Record<string, string>;
+  applyPanelVariant: (exp: unknown, variantId: string) => void;
+  initReviewMode: (apiHost: string) => Promise<void>;
+};
+type PanelsMod = PanelsResolvedModule & LazyModule<PanelsResolvedModule>;
 
 interface GrowthWindow extends Window {
   dataLayer: Record<string, unknown>[];
@@ -83,7 +92,7 @@ function vid(skipCookie?: boolean): string {
   return id;
 }
 
-interface SavedAssignment { variantId: string; css?: string; external_css?: string[]; external_js?: string[]; exposedAt?: number }
+interface SavedAssignment { variantId: string; css?: string; external_css?: string[]; external_js?: string[]; exposedAt?: number; redirect_url?: string; is_control?: boolean; }
 
 function saveAssignments(pk: string, assignments: Map<string, Variant>, experiments: ExperimentConfig[], exposedAt?: Map<string, number>): void {
   try {
@@ -96,6 +105,10 @@ function saveAssignments(pk: string, assignments: Map<string, Variant>, experime
           if (v.css) entry.css = v.css;
           if (v.external_css) entry.external_css = v.external_css;
           if (v.external_js) entry.external_js = v.external_js;
+        }
+        if (e.mode === 'redirect') {
+          if (v.redirect_url) entry.redirect_url = v.redirect_url;
+          entry.is_control = !!v.is_control;
         }
         const ts = exposedAt?.get(eid);
         if (ts) entry.exposedAt = ts;
@@ -266,6 +279,11 @@ function runJs(v: Variant): void {
   } catch (e) { console.error('[GR] JS error ' + v.name + ':', e); }
 }
 
+function selectorMatchesNow(selectors: string[]): boolean {
+  if (!D || !selectors.length) return false;
+  return selectors.some(sel => { try { return !!D!.querySelector(sel); } catch { return false; } });
+}
+
 function goalKey(g: Goal): string { return g.goal_type + (g.value ? ':' + g.value : ''); }
 
 function mkEvt(eid: string, vid: string, uid: string, sid?: string, extra?: Record<string, unknown>, attrs?: Record<string, string>): ABEvent {
@@ -313,8 +331,10 @@ export class GrowthRoadmaps {
   #ran = new Set<string>();
   #cl: (() => void)[] = [];
   #fg = new Set<string>();
-  #origSubmit: (() => void) | null = null;
   #gf = new Set<string>();
+  #goalCtx: { checkUrlGoals: () => void } | null = null;
+  #audCtx: { urlScan: () => void; cleanup: () => void } | null = null;
+  #panelsMod: PanelsResolvedModule | null = null;
   #pv = false;
   #pvExps: Array<{ id: string; name: string; variants: Variant[] }> = [];
   #lu: string = W ? W.location.href : '';
@@ -323,6 +343,7 @@ export class GrowthRoadmaps {
   #consent: boolean;
   #consentRequired: boolean;
   #pendingEvents: ABEvent[] = [];
+  #mo: MutationObserver | null = null;
   #ht: HeatmapTracker | null = null;
   #ft: FormTracker | null = null;
   #hc: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; sampling_rate?: number }> = [];
@@ -337,9 +358,6 @@ export class GrowthRoadmaps {
   // can be filtered by audience slice. Reserved keys can never appear.
   #attrs: Record<string, string> = {};
   #audCl: (() => void)[] = [];
-  // Tracks one-shot audience rules already fired so listeners don't re-set
-  // the same attribute on every click/submit.
-  #audFired = new Set<string>();
 
   constructor(c: GrowthConfig) {
     this.#consentRequired = c.cookieConsent === 'required';
@@ -470,6 +488,80 @@ export class GrowthRoadmaps {
 
   #dbg(...args: unknown[]): void { if (this.#debug) console.log('[GR Debug]', ...args); }
 
+  #runVariantJs(v: Variant): void {
+    const once = v.runOnce !== false;
+    if (once && this.#ran.has(v.id)) return;
+    if (once) this.#ran.add(v.id);
+    loadExternalJs(v).then(function() { runJs(v); });
+  }
+
+  #setupMutationObserver(): void {
+    // Always disconnect any existing observer first (ensures idempotent re-arming)
+    this.#mo?.disconnect();
+    this.#mo = null;
+
+    if (this.#c.mutationObserver === false) return;
+
+    const u = this.#uid();
+    if (!u) return;
+
+    // Build (variant, selector) pairs only for currently-eligible experiments
+    const pairs: Array<{ v: Variant; sel: string }> = [];
+    for (const e of this.#e) {
+      if (e.status !== 'running' || e.mode !== 'client' || !e.variants?.length) continue;
+      if (!passesRules(e.url_rules)) continue;
+      if (e.targeting_rules?.length && !e.targeting_rules.every(r => evalRule(r, this.#pk(), this.#c.customAttributes))) continue;
+      const pct = e.traffic_percentage ?? 100;
+      if (pct < 100 && fnv1a(e.id + '::traffic::' + u) % 100 >= pct) continue;
+      const v = this.#a.get(e.id);
+      if (!v || !v.selectors?.length) continue;
+      for (const sel of v.selectors) {
+        pairs.push({ v, sel });
+      }
+    }
+    if (!pairs.length || !D?.body) return;
+
+    // Accumulated across all mutations fired during the throttle window
+    const pending: Element[] = [];
+    let scheduled = false;
+    this.#mo = new MutationObserver((mutations) => {
+      // Always collect — never drop during a pending window
+      for (const m of mutations) {
+        m.addedNodes.forEach(n => { if (n.nodeType === 1) pending.push(n as Element); });
+      }
+      if (scheduled) return;
+      scheduled = true;
+      const run = () => {
+        scheduled = false;
+        // Drain the accumulator atomically so concurrent mutations stay queued
+        const batch = pending.splice(0);
+        for (const { v, sel } of pairs) {
+          // For runOnce variants, #ran is the authoritative gate
+          if (v.runOnce !== false && this.#ran.has(v.id)) continue;
+          // Find the first newly-added element matching this selector
+          let matchedEl: Element | null = null;
+          for (const el of batch) {
+            try {
+              if (el.matches(sel)) { matchedEl = el; break; }
+              const child = el.querySelector(sel);
+              if (child) { matchedEl = child; break; }
+            } catch {}
+          }
+          if (!matchedEl) continue;
+          // Per-element deduplication via data attribute (no memory leak, survives remounts correctly).
+          // Sanitize the variant ID so the attribute name is always valid (data-* must be lowercase ASCII).
+          const attrKey = 'data-gr-ran-' + v.id.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+          if (matchedEl.getAttribute(attrKey) === '1') continue;
+          matchedEl.setAttribute(attrKey, '1');
+          this.#runVariantJs(v);
+        }
+      };
+      if (typeof requestIdleCallback === 'function') requestIdleCallback(run);
+      else setTimeout(run, 50);
+    });
+    this.#mo.observe(D.body, { childList: true, subtree: true });
+  }
+
   async #initHeatmap(urlRuleSets: Array<Array<{ match_type: string; value: string }>>, trackAllPages: boolean, samplingRate = 1.0): Promise<void> {
     if (!D || (urlRuleSets.length === 0 && !trackAllPages)) return;
     const mod = await import('./heatmap') as HeatmapModule & LazyModule<HeatmapModule>;
@@ -525,18 +617,57 @@ export class GrowthRoadmaps {
   }
 
   async init(): Promise<void> {
+    // Start loading lazy chunks immediately so they download in parallel with the
+    // config fetch — zero extra perceived latency in production (HTTP/2 multiplexed).
+    // In ESM / test mode these resolve as native dynamic imports without any script tag.
+    // Baseline before this split: growth.min.js 70 KB raw / 20.9 KB gzip.
+    const goalsChunkProm = (import('./goals') as Promise<GoalsModule & LazyModule<GoalsModule>>)
+      .then(m => (typeof m.__lazyLoad === 'function' ? m.__lazyLoad() as Promise<GoalsModule> : Promise.resolve(m)));
+    const audChunkProm = (import('./audience') as Promise<AudienceModule & LazyModule<AudienceModule>>)
+      .then(m => (typeof m.__lazyLoad === 'function' ? m.__lazyLoad() as Promise<AudienceModule> : Promise.resolve(m)));
+
     try {
       if (W) {
         // Check for review mode first — takes priority over preview mode
         const reviewToken = new URLSearchParams(W.location.search).get('_ab_review');
         if (reviewToken) {
-          await initReviewMode(this.#c.apiHost);
+          const pm = await import('./panels') as PanelsMod;
+          const pr = typeof pm.__lazyLoad === 'function' ? await pm.__lazyLoad() : pm;
+          await pr.initReviewMode(this.#c.apiHost);
           revealPage();
           console.info('[GR] Review mode active — tracking disabled');
           return;
         }
 
         const sp = new URLSearchParams(W.location.search);
+
+        // gr_preview: IT implementation preview mode.
+        const grPreview = sp.get('gr_preview');
+        if (grPreview) {
+          try {
+            const r = await fetch(
+              this.#c.apiHost + '/api/it/verify-preview?gr_preview=' + encodeURIComponent(grPreview)
+            );
+            if (r.ok) {
+              const d = await r.json();
+              if (d.valid) {
+                const fv = { id: d.variantId, name: 'preview', weight: 100, css: d.css ?? undefined, js: d.js ?? undefined } as Variant;
+                if (d.css) addCss(fv, '', this.#sm);
+                if (d.js) runJs(fv);
+                console.info('[GR] IT preview mode: winning variant applied via gr_preview');
+              } else {
+                console.warn('[GR] gr_preview: invalid or tampered token — no variant applied');
+              }
+            } else {
+              console.warn('[GR] gr_preview: server rejected token (status ' + r.status + ')');
+            }
+          } catch (e) {
+            console.warn('[GR] gr_preview: fetch error', e);
+          }
+          revealPage();
+          return;
+        }
+
         const t = sp.get('_ab_preview');
 
         if (t === 'panel' || this.#isPanelSession()) {
@@ -553,20 +684,23 @@ export class GrowthRoadmaps {
                 this.#pv = true;
                 this.#pvExps = panelConfig.experiments.map((exp: { id: string; name: string; variants: Variant[] }) => ({ id: exp.id, name: exp.name, variants: exp.variants }));
                 this.#clearPanelAssets();
-                const selections = getStoredSelections();
+                const pm = await import('./panels') as PanelsMod;
+                const pr = typeof pm.__lazyLoad === 'function' ? await pm.__lazyLoad() : pm;
+                this.#panelsMod = pr;
+                const selections = pr.getStoredSelections();
                 for (const exp of panelConfig.experiments) {
                   if (!passesRules(exp.url_rules)) continue;
                   if (exp.targeting_rules?.length && !exp.targeting_rules.every((tr: {id?:string;attribute:string;operator:string;value:string}) => evalRule(tr as TargetingRule, pk, this.#c.customAttributes))) continue;
                   const selectedId = selections[exp.id] || (exp.variants[0]?.id || '');
                   if (selectedId) {
-                    applyPanelVariant(exp, selectedId);
+                    pr.applyPanelVariant(exp, selectedId);
                   }
                 }
                 revealPage();
                 if (D && D.readyState === 'complete') {
-                  renderPreviewPanel(panelConfig);
+                  pr.renderPreviewPanel(panelConfig);
                 } else if (W) {
-                  W.addEventListener('load', () => renderPreviewPanel(panelConfig));
+                  W.addEventListener('load', () => pr.renderPreviewPanel(panelConfig));
                 }
                 console.info('[GR] Preview panel mode active — tracking disabled');
                 return;
@@ -600,7 +734,7 @@ export class GrowthRoadmaps {
         const headers: Record<string, string> = {};
         if (storedEtag) headers['If-None-Match'] = storedEtag;
         const cdnUrl = 'https://js.growthroadmaps.com/configs/' + encodeURIComponent(pk) + '.json';
-        const fallbackUrl = this.#c.apiHost + '/api/sdk/config/' + encodeURIComponent(pk) + '.json';
+        const fallbackUrl = this.#c.apiHost + '/api/ab/experiments/all-configs?pk=' + encodeURIComponent(pk);
         let r: Response | null = null;
         try {
           const cdnR = await fetch(cdnUrl, { headers });
@@ -609,10 +743,7 @@ export class GrowthRoadmaps {
           r = await fetch(fallbackUrl, { headers });
         }
         if (r.status === 304) {
-          // Server confirms config is unchanged. If the local cache TTL had expired
-          // (useCached === false), state was never hydrated above — do it now from the
-          // stale cc since the server confirms it's still current. Refresh the timestamp
-          // so it's treated as fresh for the next TTL period.
+          // Server confirms config is unchanged — refresh the local timestamp.
           if (!useCached && cc) {
             this.#e = cc.experiments; this.#p = cc.project || null;
             this.#hc = cc.heatmapConfigs || []; this.#fac = cc.formAnalyticsConfigs || [];
@@ -622,16 +753,19 @@ export class GrowthRoadmaps {
         } else if (r.ok) {
           const etag = r.headers.get('etag');
           if (etag) { try { localStorage.setItem('_ab_cfg_etag_' + pk, etag); } catch {} }
-          const d = await r.json();
-          if (d.project) this.#p = d.project;
-          if (!useCached) {
-            if (d.experiments) this.#e = Object.values(d.experiments) as ExperimentConfig[];
-            else this.#e = Array.isArray(d) ? d : Object.values(d);
+          let d = await r.json();
+          if (!d || typeof d !== 'object' || (!d.project && !d.experiments && !d.audiences && !d.surveys)) {
+            const apiR = await fetch(fallbackUrl, { headers });
+            if (!apiR.ok) throw 0;
+            d = await apiR.json();
           }
+          if (d.project) this.#p = d.project;
+          if (d.experiments) this.#e = Object.values(d.experiments) as ExperimentConfig[];
+          else this.#e = Array.isArray(d) ? d : Object.values(d);
           if (d.heatmapConfigs) this.#hc = d.heatmapConfigs;
           if (d.formAnalyticsConfigs) this.#fac = d.formAnalyticsConfigs;
           if (Array.isArray(d.audiences)) this.#aud = d.audiences as AudienceAttributeConfig[];
-          if (Array.isArray(d.surveys)) this.#surveyData = d.surveys;
+          if (Array.isArray(d.surveys)) this.#surveyData = d.surveys as SurveyData[];
           setCachedConfig(pk, { experiments: this.#e, project: this.#p || undefined, heatmapConfigs: this.#hc, formAnalyticsConfigs: this.#fac, audiences: this.#aud, surveys: this.#surveyData, timestamp: Date.now() });
         } else { throw 0; }
       } catch { if (!useCached) { this.#e = cc ? cc.experiments : []; this.#p = cc?.project || null; this.#hc = cc?.heatmapConfigs || []; this.#fac = cc?.formAnalyticsConfigs || []; this.#aud = cc?.audiences || []; this.#surveyData = cc?.surveys || []; } }
@@ -651,11 +785,34 @@ export class GrowthRoadmaps {
             this.#dbg('Restored assignment:', eName, '→', v.name);
           }
         }
-        // Audience detection installs first so that any matching url_match
-        // attribute on the current page is set BEFORE the exposure event
-        // fires inside #applyClientExperiments / first getVariant() call.
-        this.#audSetup();
-        this.#goals(); this.#route(); this.#applyClientExperiments();
+        const mkAudCtx = (): AudienceContext => ({
+          audiences: this.#aud,
+          applyAttribute: (key, value) => this.#applyAttribute(key, value),
+          dbg: (...args) => this.#dbg(...args),
+        });
+        // Audience URL scan runs before experiment assignment so URL-match
+        // attributes are available when client-side experiments are applied.
+        try {
+          const a = await audChunkProm;
+          const ac = a.setupAudience(mkAudCtx());
+          this.#audCtx = ac;
+          this.#audCl.push(ac.cleanup);
+        } catch (err) { this.#dbg('Audience chunk load failed:', err); }
+
+        this.#route(); this.#applyClientExperiments(); this.#applyRedirectExperiments();
+
+        const mkCtx = (): GoalContext => ({
+          experiments: this.#e,
+          trackFor: (name, key) => this.trackFor(name, key),
+          flushBeacon: () => this.#b.flushBeacon(),
+          firedGoals: this.#fg,
+          dbg: (...args) => this.#dbg(...args),
+        });
+        try {
+          const g = await goalsChunkProm;
+          this.#cl.push(g.setupGoals(mkCtx()));
+          this.#goalCtx = { checkUrlGoals: () => g.checkUrlGoals(mkCtx()) };
+        } catch (err) { this.#dbg('Goals chunk load failed:', err); }
       }
       if (!this.#pv && this.#c.heatmaps && this.#p?.heatmaps_enabled !== false) {
         const hasAllPages = this.#p?.heatmap_all_pages_enabled === true;
@@ -718,195 +875,9 @@ export class GrowthRoadmaps {
     this.#b.destroy();
   }
 
-  // Wires up project-level audience attribute detection: url_match rules
-  // fire on initial page + every SPA navigation; element_click + form_submit
-  // attach delegated listeners that set the attribute when triggered.
-  #audSetup(): void {
-    for (const c of this.#audCl) c();
-    this.#audCl = [];
-    this.#audFired.clear();
-    if (!W || !this.#aud.length) return;
-
-    // URL match rules — evaluate against current href right away.
-    this.#audUrlScan();
-
-    if (!D) return;
-
-    const clickRules = this.#aud.filter(a => a.source_type === 'click' && a.value);
-    if (clickRules.length) {
-      const handler = (ev: Event) => {
-        const t = ev.target;
-        if (!(t instanceof Element)) return;
-        for (const r of clickRules) {
-          const k = 'click::' + r.id;
-          if (this.#audFired.has(k)) continue;
-          let matched = false;
-          try { matched = !!r.value && !!t.closest(r.value); } catch { matched = false; }
-          if (matched) {
-            this.#audFired.add(k);
-            this.#applyAttribute(r.attribute_key, r.set_value || 'yes');
-          }
-        }
-      };
-      D.addEventListener('click', handler, true);
-      this.#audCl.push(() => D!.removeEventListener('click', handler, true));
-    }
-
-    // Selector mode requires a CSS selector value; URL/action_url mode
-    // treats an empty value as "match all forms" (mirrors the goals
-    // form_submit semantics and matches what the API/UI promise users).
-    const formRules = this.#aud.filter(a =>
-      a.source_type === 'form_submit' &&
-      (a.url_match_type === 'selector' ? !!a.value : true)
-    );
-    if (formRules.length) {
-      // Two match modes for form_submit:
-      //  - url_match_type === 'selector' → CSS selector against the form
-      //  - any other url_match_type      → URL match against form.action,
-      //    using the same urlMatch() helper as url_match audiences (so
-      //    contains/equals/starts_with/ends_with/regex all work uniformly).
-      //    An empty value in this mode means "match all submits".
-      const checkForm = (form: HTMLFormElement) => {
-        for (const r of formRules) {
-          const k = 'form::' + r.id;
-          if (this.#audFired.has(k)) continue;
-          let matched = false;
-          const mt = r.url_match_type || 'selector';
-          try {
-            if (mt === 'selector') {
-              matched = !!r.value && (form.matches(r.value) || !!form.closest(r.value));
-            } else if (!r.value) {
-              matched = true;
-            } else {
-              const action = form.getAttribute('action') || (W ? W.location.href : '');
-              // Resolve relative actions against the current document.
-              let resolved = action;
-              try { resolved = new URL(action, W ? W.location.href : undefined).href; } catch {}
-              matched = urlMatch(resolved, mt, r.value);
-            }
-          } catch { matched = false; }
-          if (matched) {
-            this.#audFired.add(k);
-            this.#applyAttribute(r.attribute_key, r.set_value || 'yes');
-          }
-        }
-      };
-      const submitHandler = (ev: Event) => {
-        const form = ev.target;
-        if (form instanceof HTMLFormElement) checkForm(form);
-      };
-      D.addEventListener('submit', submitHandler, true);
-      this.#audCl.push(() => D!.removeEventListener('submit', submitHandler, true));
-    }
-  }
-
-  // Re-run url_match audience detection (called on initial setup + SPA
-  // navigations). Reserved keys are filtered out at config time but we
-  // double-check via #applyAttribute.
-  #audUrlScan(): void {
-    if (!W || !this.#aud.length) return;
-    const url = W.location.href;
-    for (const r of this.#aud) {
-      if (r.source_type !== 'url_match' || !r.value) continue;
-      const k = 'url::' + r.id + '::' + url;
-      if (this.#audFired.has(k)) continue;
-      const matchType = r.url_match_type || 'contains';
-      let matched = false;
-      try { matched = urlMatch(url, matchType, r.value); } catch { matched = false; }
-      if (matched) {
-        this.#audFired.add(k);
-        this.#applyAttribute(r.attribute_key, r.set_value || 'yes');
-      }
-    }
-  }
-
-  #goals(): void {
-    for (const c of this.#cl) c();
-    this.#cl = []; this.#fg.clear();
-    if (!W) return;
-    const cl: { e: string; g: string; s: string }[] = [];
-    const engagementGoals: { e: string; g: string; value: string; matchType: string }[] = [];
-    const formGoals: { e: string; g: string; value: string; matchType: string; isSelector: boolean }[] = [];
-    for (const e of this.#e) {
-      if (e.status !== 'running' || !e.goals) continue;
-      for (const g of e.goals) {
-        this.#dbg('Goal registered:', e.name, '→', g.goal_type, g.value || '');
-        if (g.goal_type === 'click' && g.value && D) cl.push({ e: e.name, g: goalKey(g), s: g.value });
-        if (g.goal_type === 'url_match') this.#urlGoal(e.name, goalKey(g), g);
-        if (g.goal_type === 'engagement' && g.value) engagementGoals.push({ e: e.name, g: goalKey(g), value: g.value, matchType: g.url_match_type || 'contains' });
-        if (g.goal_type === 'form_submit') formGoals.push({ e: e.name, g: goalKey(g), value: g.value || '', matchType: g.url_match_type || 'contains', isSelector: g.url_match_type === 'selector' });
-      }
-    }
-    if (cl.length) {
-      if (cl.length >= 3) {
-        const h = (ev: Event) => { const t = ev.target; if (!(t instanceof Element)) return; let any = false; for (const c of cl) { try { const matched = !!t.closest(c.s); this.#dbg('Click goal check:', c.e, '| selector:', c.s, '| matched:', matched); if (matched) { this.trackFor(c.e, c.g); any = true; } } catch {} } if (any) this.#b.flushBeacon(); };
-        D!.addEventListener('click', h);
-        this.#cl.push(() => D!.removeEventListener('click', h));
-      } else {
-        for (const c of cl) {
-          const h = (ev: Event) => { const matched = ev.target instanceof Element && !!ev.target.closest(c.s); this.#dbg('Click goal check:', c.e, '| selector:', c.s, '| matched:', matched); if (matched) { this.trackFor(c.e, c.g); this.#b.flushBeacon(); } };
-          D!.addEventListener('click', h); this.#cl.push(() => D!.removeEventListener('click', h));
-        }
-      }
-    }
-    if (engagementGoals.length && D) {
-      const engagementTags = new Set(['A', 'BUTTON', 'INPUT', 'TEXTAREA', 'SELECT', 'LABEL', 'IMG']);
-      const h = (ev: Event) => {
-        const t = ev.target;
-        if (!(t instanceof Element)) return;
-        const el = engagementTags.has(t.tagName) ? t : t.closest('a,button,input,textarea,select,label,img');
-        if (!el) return;
-        const url = W!.location.href;
-        for (const eg of engagementGoals) {
-          const k = eg.e + '::' + eg.g;
-          if (this.#fg.has(k)) continue;
-          const matched = urlMatch(url, eg.matchType, eg.value);
-          this.#dbg('Engagement goal check:', eg.e, '| pattern:', eg.value, '| type:', eg.matchType, '| matched:', matched);
-          if (matched) { this.#fg.add(k); this.trackFor(eg.e, eg.g); }
-        }
-      };
-      D.addEventListener('mousedown', h);
-      this.#cl.push(() => D!.removeEventListener('mousedown', h));
-    }
-    if (formGoals.length && D) {
-      const checkForm = (form: HTMLFormElement, source: string) => {
-        for (const fg of formGoals) {
-          const k = fg.e + '::' + fg.g;
-          if (this.#fg.has(k)) continue;
-          let matched: boolean;
-          if (fg.isSelector) {
-            try { matched = !!fg.value && (form.matches(fg.value) || !!form.closest(fg.value)); } catch { matched = false; }
-            this.#dbg(`Form goal check (${source} selector):`, fg.e, '| selector:', fg.value, '| matched:', matched);
-          } else {
-            const action = form.action || W!.location.href;
-            matched = !fg.value || urlMatch(action, fg.matchType, fg.value);
-            this.#dbg(`Form goal check (${source} action URL):`, fg.e, '| action:', action, '| pattern:', fg.value, '| type:', fg.matchType, '| matched:', matched);
-          }
-          if (matched) { this.#fg.add(k); this.trackFor(fg.e, fg.g); this.#b.flushBeacon(); }
-        }
-      };
-      const h = (ev: Event) => {
-        const form = ev.target;
-        if (!(form instanceof HTMLFormElement)) return;
-        checkForm(form, 'event');
-      };
-      D.addEventListener('submit', h);
-      this.#cl.push(() => D!.removeEventListener('submit', h));
-      const orig = HTMLFormElement.prototype.submit;
-      this.#origSubmit = orig;
-      const self = this;
-      HTMLFormElement.prototype.submit = function(this: HTMLFormElement) {
-        self.#dbg('Form goal check (programmatic submit):', this);
-        checkForm(this, 'programmatic submit');
-        return orig.call(this);
-      };
-      this.#cl.push(() => { HTMLFormElement.prototype.submit = orig; self.#origSubmit = null; });
-    }
-  }
-
   getVariant(name: string, fb: string): string {
     if (this.#pv) {
-      const selections = getStoredSelections();
+      const selections = this.#panelsMod ? this.#panelsMod.getStoredSelections() : {};
       const pvExp = this.#pvExps.find(x => x.name === name);
       if (pvExp) {
         const selectedId = selections[pvExp.id];
@@ -947,7 +918,30 @@ export class GrowthRoadmaps {
     }
     if (this.#ht) this.#ht.setVariantId(v.id);
     if (this.#ft) this.#ft.setVariantId(v.id);
-    if (e.mode === 'client' && !this.#ran.has(v.id)) { this.#ran.add(v.id); addCss(v, e.id, this.#sm); loadExternalJs(v).then(function() { runJs(v); }); }
+    if (e.mode === 'client') { addCss(v, e.id, this.#sm); if (this.#c.mutationObserver === false || !v.selectors?.length || selectorMatchesNow(v.selectors)) this.#runVariantJs(v); }
+    if (e.mode === 'redirect' && !ex && !v.is_control && v.redirect_url) {
+      // Check URL params for loop protection (visitor already arrived at destination page via redirect)
+      const sp = new URLSearchParams(W.location.search);
+      const lpExp = sp.get('_ab_exp'), lpVar = sp.get('_ab_var');
+      if (!(lpExp === e.id && lpVar === v.id)) {
+        // Resolve destination — supports absolute URLs and root-relative paths (/path)
+        let destUrl: URL | null = null;
+        try { destUrl = new URL(v.redirect_url); } catch {}
+        if (!destUrl && v.redirect_url.startsWith('/')) {
+          try { destUrl = new URL(v.redirect_url, W.location.origin); } catch {}
+        }
+        // Only redirect if not already on the destination page
+        if (destUrl && !(W.location.hostname === destUrl.hostname && W.location.pathname === destUrl.pathname)) {
+          // Flush beacon so exposure event is sent before navigation
+          this.#b.flushBeacon();
+          saveAssignments(this.#pk(), this.#a, this.#e, this.#exposedAt);
+          destUrl.searchParams.set('_ab_exp', e.id);
+          destUrl.searchParams.set('_ab_var', v.id);
+          W.location.replace(destUrl.toString());
+          return fb; // page will navigate away; return fallback for any synchronous callers
+        }
+      }
+    }
     saveAssignments(this.#pk(), this.#a, this.#e, this.#exposedAt);
     return v.name;
   }
@@ -984,16 +978,86 @@ export class GrowthRoadmaps {
     if (matchedGoal && this.#sv) this.#sv.onConversion(e.id, matchedGoal.id);
   }
 
-  #urlGoal(en: string, gn: string, g: Goal): void {
-    const k = en + '::' + gn;
-    if (this.#fg.has(k) || !g.value) return;
-    const matched = urlMatch(W!.location.href, g.url_match_type || 'contains', g.value);
-    this.#dbg('URL goal check:', en, '| pattern:', g.value, '| type:', g.url_match_type || 'contains', '| url:', W!.location.href, '| matched:', matched);
-    if (matched) { this.#fg.add(k); this.trackFor(en, gn); }
-  }
-
-  #allUrlGoals(): void {
-    for (const e of this.#e) { if (e.status !== 'running' || !e.goals) continue; for (const g of e.goals) if (g.goal_type === 'url_match') this.#urlGoal(e.name, goalKey(g), g); }
+  #applyRedirectExperiments(): void {
+    if (!W) return;
+    const u = this.#uid();
+    if (!u) return;
+    // Bot detection: skip redirect for known crawlers
+    const botRe = /bot|crawl|spider|slurp|googlebot|bingbot|yandex|baidu|duckduck/i;
+    if (botRe.test(N?.userAgent || '')) return;
+    // Destination-page ingestion: _ab_exp + _ab_var params mean this is the landing page
+    // of a redirect. Persist the assignment for that experiment without re-bucketing or
+    // firing a duplicate exposure.
+    const sp = new URLSearchParams(W.location.search);
+    const paramExpId = sp.get('_ab_exp');
+    const paramVarId = sp.get('_ab_var');
+    if (paramExpId && paramVarId) {
+      const paramExp = this.#e.find(x => x.id === paramExpId && x.mode === 'redirect' && x.status === 'running');
+      if (paramExp) {
+        if (!this.#a.has(paramExpId)) {
+          // Fresh visitor: bucketed+redirected by loader pre-paint but assignment was never
+          // persisted to localStorage. Ingest the assignment so the main loop can find it.
+          // Do NOT mark #seen here — the main loop must fire exposure exactly once.
+          const paramVariant = paramExp.variants?.find(x => x.id === paramVarId);
+          if (paramVariant) {
+            this.#a.set(paramExpId, paramVariant);
+            this.#dbg('applyRedirect: destination-page ingestion (will expose)', paramExp.name, '→', paramVariant.name);
+          }
+        } else if (this.#exposedAt.has(paramExpId)) {
+          // Returning visitor: exposure was already fired on the source page before redirect
+          // (exposedAt was persisted to localStorage and restored). Suppress re-exposure.
+          this.#seen.add(paramExpId);
+          this.#dbg('applyRedirect: destination-page — exposure already sent, suppressing for', paramExp.name);
+        }
+        // Third case: assigned but exposedAt absent — exposure was never sent, main loop fires it.
+      }
+    }
+    let assigned = false;
+    let exposed = false;
+    for (const e of this.#e) {
+      if (e.status !== 'running' || e.mode !== 'redirect' || !e.variants?.length) continue;
+      if (!passesRules(e.url_rules)) continue;
+      if (e.targeting_rules?.length && !e.targeting_rules.every(r => evalRule(r, this.#pk(), this.#c.customAttributes))) continue;
+      const pct = e.traffic_percentage ?? 100;
+      const ex = pct < 100 && fnv1a(e.id + '::traffic::' + u) % 100 >= pct;
+      let v = this.#a.get(e.id);
+      if (!v) {
+        v = ex ? (e.variants.find(x => x.is_control) || e.variants[0]) : assignVariant(e.id, u, e.variants);
+        this.#a.set(e.id, v);
+        assigned = true;
+        this.#dbg('applyRedirect: assigned', e.name, '→', v.name, ex ? '(traffic excluded)' : '');
+      }
+      if (!this.#seen.has(e.id)) {
+        this.#seen.add(e.id);
+        this.#exposedAt.set(e.id, Date.now());
+        this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined, this.#attrs));
+        this.#dbg('Exposure event (redirect):', e.name, '→', v.name);
+        if (this.#sv) this.#sv.onExposure();
+        exposed = true;
+      }
+      if (ex || v.is_control || !v.redirect_url) continue;
+      // Loop protection: already on destination page — both experiment and variant match params
+      if (paramExpId === e.id && paramVarId === v.id) continue;
+      // Resolve redirect URL — supports absolute (http/https) and root-relative (/path)
+      let destUrl: URL | null = null;
+      try { destUrl = new URL(v.redirect_url); } catch {}
+      if (!destUrl && v.redirect_url.startsWith('/')) {
+        try { destUrl = new URL(v.redirect_url, W.location.origin); } catch {}
+      }
+      if (!destUrl) continue;
+      // Check if already on destination by hostname + pathname
+      if (W.location.hostname === destUrl.hostname && W.location.pathname === destUrl.pathname) continue;
+      // Flush events synchronously before redirect
+      this.#b.flushBeacon();
+      // Redirect with loop-protection params (_ab_exp + _ab_var)
+      destUrl.searchParams.set('_ab_exp', e.id);
+      destUrl.searchParams.set('_ab_var', v.id);
+      W.location.replace(destUrl.toString());
+      break;
+    }
+    // Persist whenever assignment OR exposedAt changed — ensures exposedAt is saved after
+    // destination-page first-exposure so subsequent loads don't fire a duplicate event.
+    if (assigned || exposed) saveAssignments(this.#pk(), this.#a, this.#e, this.#exposedAt);
   }
 
   #applyClientExperiments(): void {
@@ -1027,13 +1091,15 @@ export class GrowthRoadmaps {
         if (e.ga && !this.#gf.has(e.id)) {
           try { ensureDataLayer(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; const dlEvent: Record<string, unknown> = { event: 'experience_impression', measurement_id: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name }; W!.dataLayer.push(dlEvent); this.#gf.add(e.id); this.#dbg('GA4 dataLayer.push (experience_impression):', e.name, dlEvent); } catch {}
         }
-        if (!this.#ran.has(v.id)) { this.#ran.add(v.id); addCss(v, e.id, this.#sm); loadExternalJs(v).then(function() { runJs(v); }); }
+        addCss(v, e.id, this.#sm);
+        if (this.#c.mutationObserver === false || !v.selectors?.length || selectorMatchesNow(v.selectors)) this.#runVariantJs(v);
         if (this.#ht) this.#ht.setVariantId(v.id);
         if (this.#ft) this.#ft.setVariantId(v.id);
         applied = true;
       }
     }
     if (applied || assigned) saveAssignments(this.#pk(), this.#a, this.#e, this.#exposedAt);
+    this.#setupMutationObserver();
   }
 
   #reeval(): void {
@@ -1052,11 +1118,12 @@ export class GrowthRoadmaps {
       let v = this.#a.get(e.id);
       if (!v) { v = assignVariant(e.id, u, e.variants); this.#a.set(e.id, v); assigned = true; }
       addCss(v, e.id, this.#sm);
-      if ((v.js || (v.external_js && v.external_js.length)) && !this.#ran.has(v.id)) { this.#ran.add(v.id); loadExternalJs(v).then(function() { runJs(v); }); }
+      if ((v.js || (v.external_js && v.external_js.length)) && (this.#c.mutationObserver === false || !v.selectors?.length || selectorMatchesNow(v.selectors))) this.#runVariantJs(v);
       if (this.#ht) this.#ht.setVariantId(v.id);
       if (this.#ft) this.#ft.setVariantId(v.id);
     }
     if (assigned) saveAssignments(this.#pk(), this.#a, this.#e, this.#exposedAt);
+    this.#setupMutationObserver();
   }
 
   #onNav(): void {
@@ -1065,8 +1132,8 @@ export class GrowthRoadmaps {
     this.#lu = u;
     if (this.#ht) this.#ht.pageChanged();
     if (this.#ft) this.#ft.pageChanged();
-    this.#audUrlScan();
-    this.#allUrlGoals();
+    this.#audCtx?.urlScan();
+    this.#goalCtx?.checkUrlGoals();
     this.#reeval();
     if (this.#sv) this.#sv.onRouteChange();
   }
@@ -1149,6 +1216,7 @@ export class GrowthRoadmaps {
   destroy(): void {
     if (this.#ht) { this.#ht.destroy(); this.#ht = null; }
     if (this.#ft) { this.#ft.destroy(); this.#ft = null; }
+    this.#mo?.disconnect(); this.#mo = null;
     this.#b.destroy();
     for (const c of this.#cl) c();
     this.#cl = [];

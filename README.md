@@ -101,6 +101,7 @@ import { GrowthRoadmaps } from '@growthroadmaps/growth-client'
 | `heatmaps` | `boolean` | No | Enable heatmap tracking (default: `false`) |
 | `surveys` | `boolean \| { teamId }` | No | Enable surveys (default: `false`) |
 | `cookieConsent` | `'required'` | No | Require consent before setting cookies |
+| `mutationObserver` | `boolean` | No | Watch for late-mounting DOM elements and re-run variant JS when they appear (default: `true`). Set to `false` to revert to one-shot behaviour. |
 
 ### `init(): Promise<void>`
 
@@ -152,6 +153,12 @@ Returns the inline anti-flicker script string with the specified timeout (defaul
 
 - **Heatmaps**: The heatmap tracking module is only loaded when `heatmaps: true` is set and heatmap configurations exist
 - **Survey Widget**: The survey rendering module (Shadow DOM, styles, question types) is only loaded when a survey is about to display — the lightweight trigger/targeting logic is bundled in the core
+
+## Known Limitations
+
+### Shadow DOM
+
+The `MutationObserver` used to detect late-mounting elements observes `document.body` with `{ childList: true, subtree: true }`. This observer does **not** cross shadow root boundaries. Variants whose target elements live inside a Shadow DOM (e.g. Web Components with closed or open shadow roots) will not be detected automatically by the observer. For those cases you must call variant JS manually after the shadow root and its children are attached, or re-initialise the SDK inside the component's `connectedCallback`.
 
 ## Build
 

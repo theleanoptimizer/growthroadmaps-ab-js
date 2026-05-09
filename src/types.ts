@@ -8,6 +8,9 @@ export interface Variant {
   css?: string | null;
   external_js?: string[] | null;
   external_css?: string[] | null;
+  selectors?: string[];
+  runOnce?: boolean;
+  redirect_url?: string | null;
 }
 
 export interface UrlRule {
@@ -41,7 +44,7 @@ export interface ExperimentConfig {
   id: string;
   name: string;
   status: string;
-  mode?: string;
+  mode?: 'client' | 'server' | 'redirect';
   traffic_percentage?: number;
   sequence_number?: number | null;
   variants: Variant[];
@@ -115,6 +118,7 @@ export interface GrowthConfig {
   cookieConsent?: 'required';
   heatmaps?: boolean;
   surveys?: boolean | SurveyConfig;
+  mutationObserver?: boolean;
 }
 
 export interface SurveyConfig {

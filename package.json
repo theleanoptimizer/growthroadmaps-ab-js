@@ -10,7 +10,8 @@
   ],
   "scripts": {
     "build": "node build.js",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test:e2e": "../node_modules/.bin/playwright test --config playwright.config.ts"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
