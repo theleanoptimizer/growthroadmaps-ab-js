@@ -1,5 +1,5 @@
 import { EventBatcher } from './batcher';
-import { HeatmapClickEvent, HeatmapScrollEvent, HeatmapUrlRule } from './types';
+import { HeatmapClickEvent, HeatmapScrollEvent, HeatmapAttentionEvent, HeatmapUrlRule } from './types';
 
 interface ClickRecord {
   x: number;
@@ -59,6 +59,9 @@ function urlMatch(url: string, type: string, val: string, compiledRegex?: RegExp
   }
 }
 
+const ATTENTION_BUCKETS = 20;
+const ATTENTION_POLL_MS = 250;
+
 export class HeatmapTracker {
   #batcher: EventBatcher;
   #userId: string;
@@ -74,6 +77,9 @@ export class HeatmapTracker {
   #tracking = false;
   #trackAllPages: boolean;
   #samplingRate: number;
+  #attentionBuckets: number[] = new Array(ATTENTION_BUCKETS).fill(0);
+  #attentionTimer: ReturnType<typeof setInterval> | null = null;
+  #attentionSent = false;
 
   constructor(
     batcher: EventBatcher,
@@ -107,6 +113,7 @@ export class HeatmapTracker {
     this.#tracking = this.#shouldTrack();
     this.#attachClickListener();
     this.#attachScrollListener();
+    this.#attachAttentionTracker();
     this.#attachUnloadListener();
   }
 
@@ -259,11 +266,78 @@ export class HeatmapTracker {
     this.#push(evt);
   }
 
+  #attachAttentionTracker(): void {
+    if (!this.#tracking) return;
+    const tick = () => {
+      if (!this.#tracking || !this.#consent()) return;
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const viewportHeight = window.innerHeight;
+      const pageHeight = Math.max(
+        document.body.scrollHeight,
+        document.documentElement.scrollHeight,
+        viewportHeight
+      );
+      if (pageHeight <= 0) return;
+      const vpTop = scrollTop / pageHeight;
+      const vpBottom = (scrollTop + viewportHeight) / pageHeight;
+      const bucketSize = 1 / ATTENTION_BUCKETS;
+      for (let i = 0; i < ATTENTION_BUCKETS; i++) {
+        const bTop = i * bucketSize;
+        const bBottom = (i + 1) * bucketSize;
+        const overlap = Math.max(0, Math.min(vpBottom, bBottom) - Math.max(vpTop, bTop));
+        if (overlap > 0) {
+          this.#attentionBuckets[i] += ATTENTION_POLL_MS / 1000;
+        }
+      }
+    };
+    this.#attentionTimer = setInterval(tick, ATTENTION_POLL_MS);
+    this.#cleanups.push(() => {
+      if (this.#attentionTimer !== null) {
+        clearInterval(this.#attentionTimer);
+        this.#attentionTimer = null;
+      }
+    });
+  }
+
+  #sendAttentionEvent(): void {
+    if (!this.#tracking || this.#attentionSent) return;
+    if (!this.#consent()) return;
+    const totalDwell = this.#attentionBuckets.reduce((a, b) => a + b, 0);
+    if (totalDwell <= 0) return;
+    this.#attentionSent = true;
+    const evt: HeatmapAttentionEvent = {
+      type: 'heatmap_attention',
+      variant_id: this.#variantId || '',
+      user_id: this.#userId,
+      session_id: this.#sessionId,
+      timestamp: new Date().toISOString(),
+      metadata: {
+        page_url: this.#currentPageUrl,
+        bucket_dwell_seconds: [...this.#attentionBuckets],
+        device_type: (() => {
+          const ua = navigator.userAgent;
+          if (/Tablet|iPad/i.test(ua)) return 'tablet';
+          if (/Mobi|Android/i.test(ua)) return 'mobile';
+          return 'desktop';
+        })(),
+      },
+    };
+    if (Math.random() <= this.#samplingRate) {
+      this.#batcher.push(evt);
+    }
+  }
+
   #attachUnloadListener(): void {
     const onHidden = () => {
-      if (document.visibilityState === 'hidden') this.#sendScrollEvent();
+      if (document.visibilityState === 'hidden') {
+        this.#sendScrollEvent();
+        this.#sendAttentionEvent();
+      }
     };
-    const onUnload = () => this.#sendScrollEvent();
+    const onUnload = () => {
+      this.#sendScrollEvent();
+      this.#sendAttentionEvent();
+    };
 
     document.addEventListener('visibilitychange', onHidden);
     window.addEventListener('beforeunload', onUnload);
@@ -275,15 +349,24 @@ export class HeatmapTracker {
 
   pageChanged(): void {
     this.#sendScrollEvent();
+    this.#sendAttentionEvent();
     this.#currentPageUrl = window.location.href;
     this.#maxScroll = 0;
     this.#scrollSent = false;
+    this.#attentionBuckets = new Array(ATTENTION_BUCKETS).fill(0);
+    this.#attentionSent = false;
     this.#ringBuffer = [];
     this.#tracking = this.#shouldTrack();
+    if (this.#attentionTimer !== null) {
+      clearInterval(this.#attentionTimer);
+      this.#attentionTimer = null;
+    }
+    this.#attachAttentionTracker();
   }
 
   destroy(): void {
     this.#sendScrollEvent();
+    this.#sendAttentionEvent();
     for (const fn of this.#cleanups) fn();
     this.#cleanups = [];
   }

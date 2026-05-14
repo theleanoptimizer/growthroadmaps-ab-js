@@ -76,7 +76,7 @@ export interface ConversionEvent {
   timestamp: string;
 }
 
-export type ABEvent = ExposureEvent | ConversionEvent | HeatmapClickEvent | HeatmapScrollEvent | HeatmapFormEvent;
+export type ABEvent = ExposureEvent | ConversionEvent | HeatmapClickEvent | HeatmapScrollEvent | HeatmapFormEvent | HeatmapAttentionEvent;
 
 export interface HeatmapClickEvent {
   type: 'heatmap_click';
@@ -101,6 +101,15 @@ export interface HeatmapScrollEvent {
 export interface HeatmapFormEvent {
   type: 'heatmap_form';
   experiment_id?: string;
+  variant_id?: string;
+  user_id: string;
+  session_id?: string;
+  timestamp: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface HeatmapAttentionEvent {
+  type: 'heatmap_attention';
   variant_id?: string;
   user_id: string;
   session_id?: string;
