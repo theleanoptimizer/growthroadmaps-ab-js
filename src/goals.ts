@@ -5,6 +5,7 @@ export interface GoalContext {
   trackFor: (expName: string, goalKey: string) => void;
   flushBeacon: () => void;
   firedGoals: Set<string>;
+  saveFiredGoals: () => void;
   dbg: (...args: unknown[]) => void;
 }
 
@@ -34,7 +35,7 @@ export function checkUrlGoals(ctx: GoalContext): void {
       if (ctx.firedGoals.has(k)) continue;
       const matched = urlMatch(W.location.href, g.url_match_type || 'contains', g.value);
       ctx.dbg('URL goal check:', e.name, '| pattern:', g.value, '| matched:', matched);
-      if (matched) { ctx.firedGoals.add(k); ctx.trackFor(e.name, gk(g)); }
+      if (matched) { ctx.firedGoals.add(k); ctx.saveFiredGoals(); ctx.trackFor(e.name, gk(g)); }
     }
   }
 }
@@ -58,7 +59,7 @@ export function setupGoals(ctx: GoalContext): () => void {
         if (!ctx.firedGoals.has(k)) {
           const matched = urlMatch(W.location.href, g.url_match_type || 'contains', g.value);
           ctx.dbg('URL goal check:', e.name, '| pattern:', g.value, '| matched:', matched);
-          if (matched) { ctx.firedGoals.add(k); ctx.trackFor(e.name, gk(g)); }
+          if (matched) { ctx.firedGoals.add(k); ctx.saveFiredGoals(); ctx.trackFor(e.name, gk(g)); }
         }
       }
       if (g.goal_type === 'engagement' && g.value) engagementGoals.push({ e: e.name, g: gk(g), value: g.value, matchType: g.url_match_type || 'contains' });

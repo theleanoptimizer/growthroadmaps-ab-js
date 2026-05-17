@@ -583,6 +583,7 @@ export class GrowthRoadmaps {
   }
 
   #pk(): string { return this.#c.projectKey || ''; }
+  #saveFiredGoals(): void { try { sessionStorage.setItem('_ab_fg_' + this.#pk(), JSON.stringify([...this.#fg])); } catch {} }
   #uid(): string | undefined { return this.#c.userId || this.#c.sessionId; }
   #isPanelSession(): boolean { try { return !!sessionStorage.getItem('_ab_panel_key') && sessionStorage.getItem('_ab_panel_pk') === this.#pk(); } catch { return false; } }
   #getPanelKey(): string | null { try { return sessionStorage.getItem('_ab_panel_pk') === this.#pk() ? sessionStorage.getItem('_ab_panel_key') : null; } catch { return null; } }
@@ -801,11 +802,20 @@ export class GrowthRoadmaps {
 
         this.#route(); this.#applyClientExperiments(); this.#applyRedirectExperiments();
 
+        try {
+          const raw = sessionStorage.getItem('_ab_fg_' + this.#pk());
+          if (raw) {
+            const keys: unknown = JSON.parse(raw);
+            if (Array.isArray(keys)) { for (const k of keys) { if (typeof k === 'string') this.#fg.add(k); } }
+          }
+        } catch {}
+
         const mkCtx = (): GoalContext => ({
           experiments: this.#e,
           trackFor: (name, key) => this.trackFor(name, key),
           flushBeacon: () => this.#b.flushBeacon(),
           firedGoals: this.#fg,
+          saveFiredGoals: () => this.#saveFiredGoals(),
           dbg: (...args) => this.#dbg(...args),
         });
         try {
