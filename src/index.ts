@@ -924,7 +924,7 @@ export class GrowthRoadmaps {
     }
     if (ex) return v.name;
     if (e.ga && !this.#gf.has(e.id)) {
-      try { ensureDataLayer(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; const dlEvent: Record<string, unknown> = { event: 'experience_impression', measurement_id: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name }; W!.dataLayer.push(dlEvent); this.#gf.add(e.id); this.#dbg('GA4 dataLayer.push (experience_impression):', name, dlEvent); } catch {}
+      try { ensureDataLayer(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; const dlEvent: Record<string, unknown> = { event: 'experience_impression', measurement_id: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name, variant_index: v.index ?? null }; W!.dataLayer.push(dlEvent); this.#gf.add(e.id); this.#dbg('GA4 dataLayer.push (experience_impression):', name, dlEvent); } catch {}
     }
     if (this.#ht) this.#ht.setVariantId(v.id);
     if (this.#ft) this.#ft.setVariantId(v.id);
@@ -1100,7 +1100,7 @@ export class GrowthRoadmaps {
       }
       if (!ex) {
         if (e.ga && !this.#gf.has(e.id)) {
-          try { ensureDataLayer(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; const dlEvent: Record<string, unknown> = { event: 'experience_impression', measurement_id: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name }; W!.dataLayer.push(dlEvent); this.#gf.add(e.id); this.#dbg('GA4 dataLayer.push (experience_impression):', e.name, dlEvent); } catch {}
+          try { ensureDataLayer(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; const dlEvent: Record<string, unknown> = { event: 'experience_impression', measurement_id: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name, variant_index: v.index ?? null }; W!.dataLayer.push(dlEvent); this.#gf.add(e.id); this.#dbg('GA4 dataLayer.push (experience_impression):', e.name, dlEvent); } catch {}
         }
         addCss(v, e.id, this.#sm);
         if (this.#c.mutationObserver === false || !v.selectors?.length || selectorMatchesNow(v.selectors)) this.#runVariantJs(v);
