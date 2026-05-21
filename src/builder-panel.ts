@@ -1,13 +1,3 @@
-interface BuilderVariant {
-  id: string;
-  name: string;
-  is_control: boolean;
-  js?: string | null;
-  css?: string | null;
-  external_js?: string[] | null;
-  external_css?: string[] | null;
-}
-
 interface BuilderResolveConfig {
   experiment_id: string;
   experiment_name: string;
@@ -42,7 +32,7 @@ function builderUrl(apiHost: string, token: string, path: string): string {
   return `${getApiHost(apiHost)}/api/ab/builder/${encodeURIComponent(token)}/${path}`;
 }
 
-async function applyBuilderVariant(variant: BuilderVariant): Promise<void> {
+async function applyBuilderVariant(variant: BuilderResolveConfig): Promise<void> {
   if (variant.is_control) return;
 
   if (variant.external_css?.length) {
