@@ -36,6 +36,7 @@ type PanelsResolvedModule = {
   getStoredSelections: () => Record<string, string>;
   applyPanelVariant: (exp: unknown, variantId: string) => void;
   initReviewMode: (apiHost: string) => Promise<void>;
+  initBuilderMode: (apiHost: string) => Promise<void>;
 };
 type PanelsMod = PanelsResolvedModule & LazyModule<PanelsResolvedModule>;
 
@@ -641,6 +642,17 @@ export class GrowthRoadmaps {
         }
 
         const sp = new URLSearchParams(W.location.search);
+
+        const builderToken = sp.get('_ab_builder');
+        if (builderToken) {
+          const pm = await import('./panels') as PanelsMod;
+          const pr = typeof pm.__lazyLoad === 'function' ? await pm.__lazyLoad() : pm;
+          await pr.initBuilderMode(this.#c.apiHost);
+          this.#pv = true;
+          revealPage();
+          console.info('[GR] AI Builder mode active — tracking disabled');
+          return;
+        }
 
         // gr_preview: IT implementation preview mode.
         const grPreview = sp.get('gr_preview');
