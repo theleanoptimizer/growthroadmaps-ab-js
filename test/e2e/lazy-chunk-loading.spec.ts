@@ -143,7 +143,7 @@ test.describe('Lazy chunk loading — end-to-end', () => {
     expect(goalEvent, 'click goal conversion event should be present').toBeTruthy();
   });
 
-  test('audience.min.js loads via script tag and captures click-rule attributes', async ({ page }) => {
+  test('gr-attrs.min.js loads via script tag and captures click-rule attributes', async ({ page }) => {
     const config = makeConfig({
       experiments: [
         {
@@ -175,7 +175,7 @@ test.describe('Lazy chunk loading — end-to-end', () => {
     const audienceLoaded = await page.evaluate(
       () => typeof (window as unknown as Record<string, unknown>)['__grAudience'] !== 'undefined'
     );
-    expect(audienceLoaded, 'audience.min.js should have been loaded into window.__grAudience').toBe(true);
+    expect(audienceLoaded, 'gr-attrs.min.js should have been loaded into window.__grAudience').toBe(true);
 
     await page.locator('#pricing-link').click({ force: true });
 
@@ -218,13 +218,42 @@ test.describe('Lazy chunk loading — end-to-end', () => {
     expect(src, 'goals chunk should export setupGoals').toMatch(/setupGoals/);
   });
 
-  test('audience.min.js IIFE sets window.__grAudience and exports setupAudience', async ({ page }) => {
-    const resp = await page.request.get(`${DIST_BASE}/audience.min.js`);
+  test('gr-attrs.min.js IIFE sets window.__grAudience and exports setupAudience', async ({ page }) => {
+    const resp = await page.request.get(`${DIST_BASE}/gr-attrs.min.js`);
     expect(resp.ok()).toBe(true);
     const src = await resp.text();
 
     expect(src, 'audience chunk should reference __grAudience global').toContain('__grAudience');
     expect(src, 'audience chunk should export setupAudience').toMatch(/setupAudience/);
+  });
+
+  test('blocked gr-attrs chunk does not throw uncaught rejection', async ({ page }) => {
+    const config = makeConfig({
+      audiences: [
+        {
+          id: 'aud-blocked',
+          attribute_key: 'blocked_test',
+          source_type: 'click',
+          value: '#pricing-link',
+          set_value: 'yes',
+        },
+      ],
+    });
+
+    const rejections: string[] = [];
+    page.on('pageerror', err => rejections.push(err.message));
+    page.on('console', msg => {
+      if (msg.type() === 'error') rejections.push(msg.text());
+    });
+
+    await page.route(`${DIST_BASE}/gr-attrs.min.js`, route => route.abort('blockedbyclient'));
+    await setupPage(page, config);
+    await initSdk(page, 'pk_e2e_blocked');
+
+    expect(
+      rejections.some(r => /Load failed:\s*audience/i.test(r)),
+      'should not surface audience load failure as an uncaught error'
+    ).toBe(false);
   });
 
   test('panels.min.js is served correctly and references __grPanels', async ({ page }) => {

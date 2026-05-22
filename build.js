@@ -27,7 +27,10 @@ return ${globalName};
   },
 };
 
-function createLazyPlugin(moduleName, globalVar) {
+function createLazyPlugin(moduleName, globalVar, opts = {}) {
+  const chunkFile = opts.chunkFile || moduleName;
+  const failSoft = opts.failSoft === true;
+  const failSoftStub = opts.failSoftStub || "{}";
   return {
     name: "lazy-" + moduleName,
     setup(build) {
@@ -49,9 +52,15 @@ function createLazyPlugin(moduleName, globalVar) {
                   if (scripts.length) base = scripts[scripts.length-1].src.replace(/[^/]*$/, '');
                   else base = 'https://js.growthroadmaps.com/';
                 } catch(e) { base = 'https://js.growthroadmaps.com/'; }
-                s.src = base + '${moduleName}.min.js';
+                s.src = base + '${chunkFile}.min.js';
                 s.onload = function() { ok(window.${globalVar} || {}); };
-                s.onerror = function() { fail(new Error('Load failed: ${moduleName}')); };
+                s.onerror = function() {
+                  ${failSoft
+                    ? `var stub = ${failSoftStub};
+                  window.${globalVar} = stub;
+                  ok(stub);`
+                    : `fail(new Error('Load failed: ${moduleName}'));`}
+                };
                 document.head.appendChild(s);
               });
               return window.__grLazy['${moduleName}'];
@@ -69,7 +78,12 @@ const lazySurveyPlugin        = createLazyPlugin("survey",        "__grSurvey");
 const lazySurveyWidgetPlugin  = createLazyPlugin("survey-widget", "__grSurveyWidget");
 const lazyPanelsPlugin        = createLazyPlugin("panels",        "__grPanels");
 const lazyGoalsPlugin         = createLazyPlugin("goals",         "__grGoals");
-const lazyAudiencePlugin      = createLazyPlugin("audience",      "__grAudience");
+// Public chunk name avoids ad-block lists that match "audience" in script URLs.
+const lazyAudiencePlugin      = createLazyPlugin("audience", "__grAudience", {
+  chunkFile: "gr-attrs",
+  failSoft: true,
+  failSoftStub: "{ setupAudience: function() { return { cleanup: function(){}, urlScan: function(){} }; } }",
+});
 const lazyFormTrackerPlugin   = createLazyPlugin("form-tracker",  "__grFormTracker");
 
 const corePlugins = [
@@ -159,7 +173,7 @@ async function build() {
     format: "iife",
     globalName: "__grAudience",
     ...minifyOptions,
-    outfile: "dist/audience.min.js",
+    outfile: "dist/gr-attrs.min.js",
   });
 
   await esbuild.build({
@@ -238,7 +252,7 @@ async function build() {
   const panelsSizeKB = (panelsFile.size / 1024).toFixed(2);
   const goalsFile = fs.statSync("dist/goals.min.js");
   const goalsSizeKB = (goalsFile.size / 1024).toFixed(2);
-  const audFile = fs.statSync("dist/audience.min.js");
+  const audFile = fs.statSync("dist/gr-attrs.min.js");
   const audSizeKB = (audFile.size / 1024).toFixed(2);
   const ftFile = fs.statSync("dist/form-tracker.min.js");
   const ftSizeKB = (ftFile.size / 1024).toFixed(2);
@@ -248,7 +262,7 @@ async function build() {
   console.log("  dist/growth-loader.min.js " + loaderSizeKB + " KB");
   console.log("  dist/panels.min.js       " + panelsSizeKB + " KB — lazy chunk");
   console.log("  dist/goals.min.js        " + goalsSizeKB + " KB — lazy chunk");
-  console.log("  dist/audience.min.js     " + audSizeKB + " KB — lazy chunk");
+  console.log("  dist/gr-attrs.min.js     " + audSizeKB + " KB — lazy chunk (audience attrs)");
   console.log("  dist/form-tracker.min.js " + ftSizeKB + " KB — lazy chunk");
   console.log("  dist/heatmap.min.js      " + heatmapSizeKB + " KB — lazy chunk");
   console.log("  dist/survey.min.js       " + surveySizeKB + " KB — lazy chunk");

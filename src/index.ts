@@ -31,6 +31,11 @@ type FormTrackerModule = { FormTracker: typeof FormTracker };
 type SurveyModule = { SurveyManager: typeof SurveyManager };
 type GoalsModule = { setupGoals: typeof _setupGoals; checkUrlGoals: typeof _checkUrlGoals };
 type AudienceModule = { setupAudience: typeof _setupAudience };
+
+const NOOP_AUDIENCE: AudienceModule = {
+  setupAudience: () => ({ cleanup: () => {}, urlScan: () => {} }),
+};
+
 type PanelsResolvedModule = {
   renderPreviewPanel: (c: unknown) => void;
   getStoredSelections: () => Record<string, string>;
@@ -626,7 +631,8 @@ export class GrowthRoadmaps {
     const goalsChunkProm = (import('./goals') as Promise<GoalsModule & LazyModule<GoalsModule>>)
       .then(m => (typeof m.__lazyLoad === 'function' ? m.__lazyLoad() as Promise<GoalsModule> : Promise.resolve(m)));
     const audChunkProm = (import('./audience') as Promise<AudienceModule & LazyModule<AudienceModule>>)
-      .then(m => (typeof m.__lazyLoad === 'function' ? m.__lazyLoad() as Promise<AudienceModule> : Promise.resolve(m)));
+      .then(m => (typeof m.__lazyLoad === 'function' ? m.__lazyLoad() as Promise<AudienceModule> : Promise.resolve(m)))
+      .catch(() => NOOP_AUDIENCE);
 
     try {
       if (W) {
