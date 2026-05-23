@@ -2,7 +2,7 @@ import type { ExperimentConfig, Goal } from './types';
 
 export interface GoalContext {
   experiments: ExperimentConfig[];
-  trackFor: (expName: string, goalKey: string) => void;
+  trackFor: (expName: string, goalKey: string, o?: { value?: number }) => void;
   flushBeacon: () => void;
   firedGoals: Set<string>;
   saveFiredGoals: () => void;
