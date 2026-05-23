@@ -22,7 +22,7 @@ export interface UrlRule {
 
 export interface Goal {
   id: string;
-  goal_type: 'url_match' | 'click' | 'custom' | 'engagement' | 'form_submit';
+  goal_type: 'url_match' | 'click' | 'custom' | 'engagement' | 'form_submit' | 'bounce_rate' | 'revisit_rate' | 'pageviews';
   value?: string;
   url_match_type?: string;
   label?: string;

@@ -40,10 +40,81 @@ export function checkUrlGoals(ctx: GoalContext): void {
   }
 }
 
+function incrementSessionPageviews(): number {
+  if (typeof sessionStorage === 'undefined') return 1;
+  const k = '_ab_pv';
+  const n = parseInt(sessionStorage.getItem(k) || '0', 10) + 1;
+  sessionStorage.setItem(k, String(n));
+  return n;
+}
+
+function setupBrowsingGoals(ctx: GoalContext): () => void {
+  const W = typeof window !== 'undefined' ? window : undefined;
+  if (!W) return () => {};
+
+  incrementSessionPageviews();
+  const returnKey = '_ab_return_' + W.location.hostname;
+  const hadVisited = typeof localStorage !== 'undefined' && !!localStorage.getItem(returnKey);
+  if (typeof localStorage !== 'undefined' && !localStorage.getItem(returnKey)) {
+    localStorage.setItem(returnKey, '1');
+  }
+
+  const pageviewGoals: { e: string; g: string }[] = [];
+  const bounceGoals: { e: string; g: string }[] = [];
+  const revisitGoals: { e: string; g: string }[] = [];
+
+  for (const e of ctx.experiments) {
+    if (e.status !== 'running' || !e.goals) continue;
+    for (const g of e.goals) {
+      if (g.goal_type === 'pageviews') pageviewGoals.push({ e: e.name, g: gk(g) });
+      if (g.goal_type === 'bounce_rate') bounceGoals.push({ e: e.name, g: gk(g) });
+      if (g.goal_type === 'revisit_rate') revisitGoals.push({ e: e.name, g: gk(g) });
+    }
+  }
+
+  if (hadVisited) {
+    for (const rg of revisitGoals) {
+      const k = rg.e + '::' + rg.g;
+      if (ctx.firedGoals.has(k)) continue;
+      ctx.firedGoals.add(k);
+      ctx.saveFiredGoals();
+      ctx.trackFor(rg.e, rg.g);
+    }
+  }
+
+  const onLeave = () => {
+    const currentPv = parseInt(sessionStorage.getItem('_ab_pv') || '1', 10);
+    let any = false;
+    for (const bg of bounceGoals) {
+      const k = bg.e + '::' + bg.g;
+      if (ctx.firedGoals.has(k)) continue;
+      if (currentPv <= 1) {
+        ctx.firedGoals.add(k);
+        ctx.saveFiredGoals();
+        ctx.trackFor(bg.e, bg.g);
+        any = true;
+      }
+    }
+    for (const pg of pageviewGoals) {
+      const k = pg.e + '::' + pg.g;
+      if (ctx.firedGoals.has(k)) continue;
+      ctx.firedGoals.add(k);
+      ctx.saveFiredGoals();
+      ctx.trackFor(pg.e, pg.g, { value: currentPv });
+      any = true;
+    }
+    if (any) ctx.flushBeacon();
+  };
+
+  W.addEventListener('pagehide', onLeave);
+  return () => W.removeEventListener('pagehide', onLeave);
+}
+
 export function setupGoals(ctx: GoalContext): () => void {
   const W = typeof window !== 'undefined' ? window : undefined;
   const D = typeof document !== 'undefined' ? document : undefined;
   const cleanups: Array<() => void> = [];
+  const browsingCleanup = setupBrowsingGoals(ctx);
 
   const cl: { e: string; g: string; s: string }[] = [];
   const engagementGoals: { e: string; g: string; value: string; matchType: string }[] = [];
@@ -135,5 +206,8 @@ export function setupGoals(ctx: GoalContext): () => void {
     cleanups.push(() => { HTMLFormElement.prototype.submit = orig; });
   }
 
-  return () => { for (const c of cleanups) c(); };
+  return () => {
+    for (const c of cleanups) c();
+    browsingCleanup();
+  };
 }
