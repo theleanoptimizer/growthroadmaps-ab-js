@@ -124,6 +124,13 @@ function renderBuilderPanel(
   let sending = false;
   let currentJs = config.js ?? null;
   let currentCss = config.css ?? null;
+  let sendBtn: HTMLButtonElement | null = null;
+
+  function updateSendButtonState(): void {
+    if (sendBtn) {
+      sendBtn.disabled = sending || !input.trim();
+    }
+  }
 
   const styles = document.createElement("style");
   styles.textContent = `
@@ -184,6 +191,7 @@ function renderBuilderPanel(
     .msg-user { background: #4f46e5; color: #fff; align-self: flex-end; max-width: 88%; }
     .msg-assistant { background: #f3f4f6; color: #111827; align-self: flex-start; max-width: 92%; }
     .empty { color: #9ca3af; font-style: italic; font-size: 12px; line-height: 1.45; }
+    .generating { color: #6b7280; font-size: 12px; align-self: flex-start; }
     .footer { border-top: 1px solid #e5e7eb; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
     textarea {
       width: 100%;
@@ -207,7 +215,7 @@ function renderBuilderPanel(
       font-size: 12px;
     }
     .send-btn:disabled { opacity: .55; cursor: not-allowed; }
-    .status { font-size: 11px; color: #6b7280; padding: 0 12px 8px; }
+    .status { font-size: 11px; color: #6b7280; margin-top: 2px; }
     .collapsed-bar {
       background: #4f46e5;
       color: #fff;
@@ -270,10 +278,6 @@ function renderBuilderPanel(
     const body = document.createElement("div");
     body.className = "body";
 
-    const status = document.createElement("div");
-    status.className = "status";
-    status.textContent = sending ? "Generating…" : "Changes reload the page automatically";
-
     const messagesEl = document.createElement("div");
     messagesEl.className = "messages";
     if (messages.length === 0) {
@@ -293,6 +297,12 @@ function renderBuilderPanel(
         messagesEl.appendChild(bubble);
       }
     }
+    if (sending) {
+      const generating = document.createElement("div");
+      generating.className = "generating";
+      generating.textContent = "Generating…";
+      messagesEl.appendChild(generating);
+    }
 
     const footer = document.createElement("div");
     footer.className = "footer";
@@ -302,6 +312,7 @@ function renderBuilderPanel(
     textarea.disabled = sending;
     textarea.oninput = (e) => {
       input = (e.target as HTMLTextAreaElement).value;
+      updateSendButtonState();
     };
     textarea.onkeydown = (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -312,18 +323,23 @@ function renderBuilderPanel(
 
     const sendRow = document.createElement("div");
     sendRow.className = "send-row";
-    const sendBtn = document.createElement("button");
+    sendBtn = document.createElement("button");
     sendBtn.type = "button";
     sendBtn.className = "send-btn";
     sendBtn.textContent = sending ? "Sending…" : "Send";
-    sendBtn.disabled = sending || !input.trim();
+    updateSendButtonState();
     sendBtn.onclick = () => void sendMessage();
     sendRow.appendChild(sendBtn);
 
     footer.appendChild(textarea);
     footer.appendChild(sendRow);
+    if (!sending) {
+      const status = document.createElement("div");
+      status.className = "status";
+      status.textContent = "Changes reload the page automatically";
+      footer.appendChild(status);
+    }
 
-    body.appendChild(status);
     body.appendChild(messagesEl);
     body.appendChild(footer);
     panel.appendChild(header);
