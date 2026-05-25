@@ -125,6 +125,7 @@ function renderBuilderPanel(
   let currentJs = config.js ?? null;
   let currentCss = config.css ?? null;
   let sendBtn: HTMLButtonElement | null = null;
+  let saveWarning: string | null = null;
 
   function updateSendButtonState(): void {
     if (sendBtn) {
@@ -216,6 +217,7 @@ function renderBuilderPanel(
     }
     .send-btn:disabled { opacity: .55; cursor: not-allowed; }
     .status { font-size: 11px; color: #6b7280; margin-top: 2px; }
+    .status-warn { font-size: 11px; color: #b45309; margin-top: 2px; line-height: 1.4; }
     .collapsed-bar {
       background: #4f46e5;
       color: #fff;
@@ -335,8 +337,8 @@ function renderBuilderPanel(
     footer.appendChild(sendRow);
     if (!sending) {
       const status = document.createElement("div");
-      status.className = "status";
-      status.textContent = "Changes reload the page automatically";
+      status.className = saveWarning ? "status-warn" : "status";
+      status.textContent = saveWarning || "Changes reload the page automatically";
       footer.appendChild(status);
     }
 
@@ -353,6 +355,7 @@ function renderBuilderPanel(
     const trimmed = input.trim();
     if (!trimmed || sending) return;
     sending = true;
+    saveWarning = null;
     messages.push({ role: "user", content: trimmed, timestamp: new Date().toISOString() });
     input = "";
     render();
@@ -370,6 +373,7 @@ function renderBuilderPanel(
       const data = (await res.json()) as {
         reply: string;
         code_saved?: boolean;
+        tool_activity?: Array<{ tool: string; summary: string }>;
         applied_versions?: Array<{ js: string | null; css: string | null }>;
       };
       messages.push({ role: "assistant", content: data.reply, timestamp: new Date().toISOString() });
@@ -380,6 +384,19 @@ function renderBuilderPanel(
         sending = false;
         window.location.reload();
         return;
+      }
+      if (data.code_saved === false) {
+        const triedApply = (data.tool_activity || []).some((t) => t.tool === "apply_variant_code");
+        const readOnly = (data.tool_activity || []).some(
+          (t) => t.tool === "get_variant_js" || t.tool === "get_variant_css",
+        );
+        if (readOnly && !triedApply) {
+          saveWarning = "No code changes were saved — the assistant read the code but did not update it. Try again.";
+        } else if (!triedApply) {
+          saveWarning = "No code changes were saved — try sending your request again.";
+        } else {
+          saveWarning = "No code changes were saved — the update matched what is already stored.";
+        }
       }
     } catch (e) {
       messages.push({
