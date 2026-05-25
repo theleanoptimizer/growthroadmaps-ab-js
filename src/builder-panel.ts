@@ -369,10 +369,11 @@ function renderBuilderPanel(
       }
       const data = (await res.json()) as {
         reply: string;
+        code_saved?: boolean;
         applied_versions?: Array<{ js: string | null; css: string | null }>;
       };
       messages.push({ role: "assistant", content: data.reply, timestamp: new Date().toISOString() });
-      if (data.applied_versions && data.applied_versions.length > 0) {
+      if (data.code_saved && data.applied_versions && data.applied_versions.length > 0) {
         const latest = data.applied_versions[data.applied_versions.length - 1];
         currentJs = latest.js;
         currentCss = latest.css;
