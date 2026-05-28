@@ -133,7 +133,7 @@ export function setupGoals(ctx: GoalContext): () => void {
           if (matched) { ctx.firedGoals.add(k); ctx.saveFiredGoals(); ctx.trackFor(e.name, gk(g)); }
         }
       }
-      if (g.goal_type === 'engagement' && g.value) engagementGoals.push({ e: e.name, g: gk(g), value: g.value, matchType: g.url_match_type || 'contains' });
+      if (g.goal_type === 'engagement') engagementGoals.push({ e: e.name, g: gk(g), value: g.value || '', matchType: g.url_match_type || 'contains' });
       if (g.goal_type === 'form_submit') formGoals.push({ e: e.name, g: gk(g), value: g.value || '', matchType: g.url_match_type || 'contains', isSelector: g.url_match_type === 'selector' });
     }
   }
@@ -168,8 +168,8 @@ export function setupGoals(ctx: GoalContext): () => void {
       for (const eg of engagementGoals) {
         const k = eg.e + '::' + eg.g;
         if (ctx.firedGoals.has(k)) continue;
-        const matched = urlMatch(url, eg.matchType, eg.value);
-        ctx.dbg('Engagement goal check:', eg.e, '| pattern:', eg.value, '| matched:', matched);
+        const matched = !eg.value || urlMatch(url, eg.matchType, eg.value);
+        ctx.dbg('Engagement goal check:', eg.e, '| pattern:', eg.value || '(experiment pages)', '| matched:', matched);
         if (matched) { ctx.firedGoals.add(k); ctx.trackFor(eg.e, eg.g); }
       }
     };

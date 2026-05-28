@@ -328,7 +328,7 @@ export function renderPreviewPanel(config: PanelConfig): void {
           debugCleanups.push(() => document.removeEventListener('submit', handler));
         }
 
-        if (goal.goal_type === 'engagement' && goal.value) {
+        if (goal.goal_type === 'engagement') {
           const engagementTags = new Set(['A', 'BUTTON', 'INPUT', 'TEXTAREA', 'SELECT', 'LABEL', 'IMG']);
           const handler = (ev: Event) => {
             const t = ev.target;
@@ -337,12 +337,12 @@ export function renderPreviewPanel(config: PanelConfig): void {
             if (!el) return;
             const k = exp.id + '::engagement::' + goal.id;
             if (firedGoalKeys.has(k)) return;
-            const matched = urlMatch(window.location.href, goal.url_match_type || 'contains', goal.value!);
+            const matched = !goal.value || urlMatch(window.location.href, goal.url_match_type || 'contains', goal.value);
             if (matched) {
               firedGoalKeys.add(k);
-              addDebugLog('goal-match', 'engagement goal would convert for ' + exp.name + ' → ' + variantLabel + ' (pattern: ' + goal.value + ')');
+              addDebugLog('goal-match', 'engagement goal would convert for ' + exp.name + ' → ' + variantLabel + (goal.value ? ' (pattern: ' + goal.value + ')' : ' (experiment pages)'));
             } else {
-              addDebugLog('goal-miss', 'engagement goal not matched for ' + exp.name + ' (pattern: ' + goal.value + ', current: ' + window.location.href + ')');
+              addDebugLog('goal-miss', 'engagement goal not matched for ' + exp.name + ' (pattern: ' + (goal.value || '(experiment pages)') + ', current: ' + window.location.href + ')');
             }
           };
           document.addEventListener('mousedown', handler);
