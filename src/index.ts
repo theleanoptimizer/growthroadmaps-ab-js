@@ -12,6 +12,24 @@ import {
   GrowthCommand,
 } from './types';
 import { assignVariant, fnv1a } from './hasher';
+
+function isExperimentActive(status: string): boolean {
+  return status === 'running' || status === 'rolling_out';
+}
+
+function pickVariant(e: ExperimentConfig, u: string, trafficExcluded: boolean): Variant {
+  if (e.status === 'rolling_out' && e.rollout_variant_id) {
+    return e.variants.find(x => x.id === e.rollout_variant_id)
+      || e.variants.find(x => x.is_control)
+      || e.variants[0];
+  }
+  if (trafficExcluded) {
+    return e.variants.find(x => x.is_control)
+      || e.variants.find(x => x.name.toLowerCase() === 'control')
+      || e.variants[0];
+  }
+  return assignVariant(e.id, u, e.variants);
+}
 import { getCachedConfig, setCachedConfig, isCacheFresh } from './storage';
 import { EventBatcher } from './batcher';
 import { getAntiFlickerSnippet, revealPage } from './anti-flicker';
@@ -105,7 +123,7 @@ function saveAssignments(pk: string, assignments: Map<string, Variant>, experime
     const out: Record<string, SavedAssignment> = {};
     for (const [eid, v] of assignments) {
       const e = experiments.find(x => x.id === eid);
-      if (e && e.status === 'running') {
+      if (e && isExperimentActive(e.status)) {
         const entry: SavedAssignment = { variantId: v.id };
         if (e.mode === 'client') {
           if (v.css) entry.css = v.css;
@@ -136,7 +154,7 @@ function loadAssignments(pk: string, experiments: ExperimentConfig[], exposedAtO
     for (const eid in saved) {
       const entry = saved[eid];
       if (!entry || !entry.variantId) continue;
-      const e = experiments.find(x => x.id === eid && x.status === 'running');
+      const e = experiments.find(x => x.id === eid && isExperimentActive(x.status));
       if (!e || !e.variants?.length) continue;
       const v = e.variants.find(x => x.id === entry.variantId);
       if (v) {
@@ -514,7 +532,7 @@ export class GrowthRoadmaps {
     // Build (variant, selector) pairs only for currently-eligible experiments
     const pairs: Array<{ v: Variant; sel: string }> = [];
     for (const e of this.#e) {
-      if (e.status !== 'running' || e.mode !== 'client' || !e.variants?.length) continue;
+      if (!isExperimentActive(e.status) || e.mode !== 'client' || !e.variants?.length) continue;
       if (!passesRules(e.url_rules)) continue;
       if (e.targeting_rules?.length && !e.targeting_rules.every(r => evalRule(r, this.#pk(), this.#c.customAttributes))) continue;
       const pct = e.traffic_percentage ?? 100;
@@ -607,7 +625,7 @@ export class GrowthRoadmaps {
       if (!vid) return;
       let matched = false;
       for (const e of this.#e) {
-        if (e.status !== 'running' || e.mode !== 'client') continue;
+        if (!isExperimentActive(e.status) || e.mode !== 'client') continue;
         for (const v of e.variants) {
           if (v.id === vid) {
             this.#sm.set(e.id, tag as HTMLStyleElement);
@@ -789,8 +807,8 @@ export class GrowthRoadmaps {
         } else { throw 0; }
       } catch { if (!useCached) { this.#e = cc ? cc.experiments : []; this.#p = cc?.project || null; this.#hc = cc?.heatmapConfigs || []; this.#fac = cc?.formAnalyticsConfigs || []; this.#aud = cc?.audiences || []; this.#surveyData = cc?.surveys || []; } }
     } catch { this.#e = []; } finally {
-      const running = this.#e.filter(x => x.status === 'running');
-      this.#dbg('Config loaded:', running.length, 'running experiments', running.map(x => x.name));
+      const running = this.#e.filter(x => isExperimentActive(x.status));
+      this.#dbg('Config loaded:', running.length, 'active experiments', running.map(x => x.name));
       if (this.#p) this.#dbg('Project:', this.#p.domain || this.#p.id);
       this.#adoptLoaderStyles();
       revealPage();
@@ -919,7 +937,7 @@ export class GrowthRoadmaps {
     }
     const u = this.#uid();
     if (!u) return fb;
-    const e = this.#e.find(x => x.name === name && x.status === 'running');
+    const e = this.#e.find(x => x.name === name && isExperimentActive(x.status));
     if (!e?.variants?.length) { this.#dbg('getVariant: experiment not found or no variants:', name); return fb; }
     if (!passesRules(e.url_rules)) { this.#dbg('getVariant: URL rules not matched for', name); return fb; }
     if (e.targeting_rules?.length && !e.targeting_rules.every(r => evalRule(r, this.#pk(), this.#c.customAttributes))) { this.#dbg('getVariant: targeting rules not matched for', name); return fb; }
@@ -927,7 +945,7 @@ export class GrowthRoadmaps {
     const ex = pct < 100 && fnv1a(e.id + '::traffic::' + u) % 100 >= pct;
     let v = this.#a.get(e.id);
     if (!v) {
-      v = ex ? (e.variants.find(x => x.is_control) || e.variants.find(x => x.name.toLowerCase() === 'control') || e.variants[0]) : assignVariant(e.id, u, e.variants);
+      v = pickVariant(e, u, ex);
       this.#a.set(e.id, v);
       this.#dbg('getVariant: assigned', name, '→', v.name, ex ? '(traffic excluded)' : '');
     } else {
@@ -1021,7 +1039,7 @@ export class GrowthRoadmaps {
     const paramExpId = sp.get('_ab_exp');
     const paramVarId = sp.get('_ab_var');
     if (paramExpId && paramVarId) {
-      const paramExp = this.#e.find(x => x.id === paramExpId && x.mode === 'redirect' && x.status === 'running');
+      const paramExp = this.#e.find(x => x.id === paramExpId && x.mode === 'redirect' && isExperimentActive(x.status));
       if (paramExp) {
         if (!this.#a.has(paramExpId)) {
           // Fresh visitor: bucketed+redirected by loader pre-paint but assignment was never
@@ -1044,14 +1062,14 @@ export class GrowthRoadmaps {
     let assigned = false;
     let exposed = false;
     for (const e of this.#e) {
-      if (e.status !== 'running' || e.mode !== 'redirect' || !e.variants?.length) continue;
+      if (!isExperimentActive(e.status) || e.mode !== 'redirect' || !e.variants?.length) continue;
       if (!passesRules(e.url_rules)) continue;
       if (e.targeting_rules?.length && !e.targeting_rules.every(r => evalRule(r, this.#pk(), this.#c.customAttributes))) continue;
       const pct = e.traffic_percentage ?? 100;
       const ex = pct < 100 && fnv1a(e.id + '::traffic::' + u) % 100 >= pct;
       let v = this.#a.get(e.id);
       if (!v) {
-        v = ex ? (e.variants.find(x => x.is_control) || e.variants[0]) : assignVariant(e.id, u, e.variants);
+        v = pickVariant(e, u, ex);
         this.#a.set(e.id, v);
         assigned = true;
         this.#dbg('applyRedirect: assigned', e.name, '→', v.name, ex ? '(traffic excluded)' : '');
@@ -1095,14 +1113,14 @@ export class GrowthRoadmaps {
     let applied = false;
     let assigned = false;
     for (const e of this.#e) {
-      if (e.status !== 'running' || e.mode !== 'client' || !e.variants?.length) continue;
+      if (!isExperimentActive(e.status) || e.mode !== 'client' || !e.variants?.length) continue;
       if (!passesRules(e.url_rules)) { this.#dbg('applyClient: URL rules not matched for', e.name); continue; }
       if (e.targeting_rules?.length && !e.targeting_rules.every(r => evalRule(r, this.#pk(), this.#c.customAttributes))) { this.#dbg('applyClient: targeting rules not matched for', e.name); continue; }
       const pct = e.traffic_percentage ?? 100;
       const ex = pct < 100 && fnv1a(e.id + '::traffic::' + u) % 100 >= pct;
       let v = this.#a.get(e.id);
       if (!v) {
-        v = ex ? (e.variants.find(x => x.is_control) || e.variants.find(x => x.name.toLowerCase() === 'control') || e.variants[0]) : assignVariant(e.id, u, e.variants);
+        v = pickVariant(e, u, ex);
         this.#a.set(e.id, v);
         assigned = true;
         this.#dbg('applyClient: assigned', e.name, '→', v.name, ex ? '(traffic excluded)' : '');
@@ -1136,7 +1154,7 @@ export class GrowthRoadmaps {
     if (!u) return;
     let assigned = false;
     for (const e of this.#e) {
-      if (e.status !== 'running' || e.mode !== 'client' || !e.variants?.length) continue;
+      if (!isExperimentActive(e.status) || e.mode !== 'client' || !e.variants?.length) continue;
       const ok = passesRules(e.url_rules);
       const tag = this.#sm.get(e.id);
       if (!ok && tag) { tag.remove(); this.#sm.delete(e.id); }
@@ -1145,7 +1163,7 @@ export class GrowthRoadmaps {
       const pct = e.traffic_percentage ?? 100;
       if (pct < 100 && fnv1a(e.id + '::traffic::' + u) % 100 >= pct) continue;
       let v = this.#a.get(e.id);
-      if (!v) { v = assignVariant(e.id, u, e.variants); this.#a.set(e.id, v); assigned = true; }
+      if (!v) { v = pickVariant(e, u, false); this.#a.set(e.id, v); assigned = true; }
       addCss(v, e.id, this.#sm);
       if ((v.js || (v.external_js && v.external_js.length)) && (this.#c.mutationObserver === false || !v.selectors?.length || selectorMatchesNow(v.selectors))) this.#runVariantJs(v);
       if (this.#ht) this.#ht.setVariantId(v.id);

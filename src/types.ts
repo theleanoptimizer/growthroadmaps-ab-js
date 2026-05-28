@@ -46,6 +46,7 @@ export interface ExperimentConfig {
   status: string;
   mode?: 'client' | 'server' | 'redirect';
   traffic_percentage?: number;
+  rollout_variant_id?: string | null;
   sequence_number?: number | null;
   variants: Variant[];
   url_rules?: UrlRule[];

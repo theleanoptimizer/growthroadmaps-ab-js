@@ -94,7 +94,7 @@
     if (cachedCfg && cachedCfg.experiments) {
       for (var i = 0; i < cachedCfg.experiments.length; i++) {
         var exp = cachedCfg.experiments[i];
-        if (exp.status === 'running' && passR(exp.url_rules)) {
+        if ((exp.status === 'running' || exp.status === 'rolling_out') && passR(exp.url_rules)) {
           eligible[exp.id] = true;
         }
       }
