@@ -1,6 +1,27 @@
 import { EventBatcher } from './batcher';
 import { HeatmapFormEvent, HeatmapUrlRule } from './types';
 
+interface FormRefillExample {
+  from: string;
+  to: string;
+}
+
+const SENSITIVE_FIELD_TYPES = new Set(['password', 'hidden']);
+const MAX_REFILL_VALUE_LENGTH = 80;
+
+function displayRefillValue(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '(empty)';
+  if (trimmed.length <= MAX_REFILL_VALUE_LENGTH) return trimmed;
+  return `${trimmed.slice(0, MAX_REFILL_VALUE_LENGTH)}…`;
+}
+
+function sanitizeRefillPair(from: string, to: string, fieldType: string): FormRefillExample | null {
+  if (SENSITIVE_FIELD_TYPES.has(fieldType.toLowerCase())) return null;
+  if (from === to) return null;
+  return { from: displayRefillValue(from), to: displayRefillValue(to) };
+}
+
 interface CompiledUrlRule {
   match_type: string;
   value: string;
@@ -22,6 +43,7 @@ interface FieldMetrics {
   focusTime: number;
   totalHesitation: number;
   refills: number;
+  refillExamples: FormRefillExample[];
   visitOrder: number;
   valueOnBlur: string;
   hasCompleted: boolean;
@@ -224,6 +246,7 @@ export class FormTracker {
         focusTime: 0,
         totalHesitation: 0,
         refills: 0,
+        refillExamples: [],
         visitOrder: 0,
         valueOnBlur: '',
         hasCompleted: false,
@@ -299,6 +322,14 @@ export class FormTracker {
         if (currentValue !== metrics.valueOnBlur) {
           metrics.refills++;
           metrics.changedSinceReentry = true;
+          if (metrics.refillExamples.length < 5) {
+            const example = sanitizeRefillPair(
+              metrics.valueOnBlur,
+              currentValue,
+              metrics.type,
+            );
+            if (example) metrics.refillExamples.push(example);
+          }
         }
       }
     };
@@ -379,6 +410,7 @@ export class FormTracker {
       is_dropoff: !state.submitted && field === lastFocusedField,
       hesitation_ms: field.totalHesitation,
       refills: field.refills,
+      refill_examples: field.refillExamples.length > 0 ? field.refillExamples : undefined,
       visit_order: field.visitOrder,
     }));
 
