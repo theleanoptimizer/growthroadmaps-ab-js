@@ -121,13 +121,13 @@
             a = null;
             for (var rvi = 0; rvi < expCfg.variants.length; rvi++) {
               if (expCfg.variants[rvi].id === expCfg.rollout_variant_id) {
-                var rv = expCfg.variants[rvi];
+                var rolloutVar = expCfg.variants[rvi];
                 a = {
-                  variantId: rv.id,
-                  css: rv.css || null,
-                  external_css: rv.external_css || null,
-                  redirect_url: rv.redirect_url || null,
-                  is_control: !!rv.is_control,
+                  variantId: rolloutVar.id,
+                  css: rolloutVar.css || null,
+                  external_css: rolloutVar.external_css || null,
+                  redirect_url: rolloutVar.redirect_url || null,
+                  is_control: !!rolloutVar.is_control,
                 };
                 break;
               }
