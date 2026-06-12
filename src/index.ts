@@ -30,6 +30,19 @@ function pickVariant(e: ExperimentConfig, u: string, trafficExcluded: boolean): 
   }
   return assignVariant(e.id, u, e.variants);
 }
+
+/** Rollout must win over a stale bucket saved in localStorage from the live test. */
+function resolveVariantForUser(
+  e: ExperimentConfig,
+  u: string,
+  trafficExcluded: boolean,
+  saved?: Variant,
+): Variant {
+  if (e.status === 'rolling_out' && e.rollout_variant_id) {
+    return pickVariant(e, u, trafficExcluded);
+  }
+  return saved ?? pickVariant(e, u, trafficExcluded);
+}
 import { getCachedConfig, setCachedConfig, isCacheFresh } from './storage';
 import { EventBatcher } from './batcher';
 import { getAntiFlickerSnippet, revealPage } from './anti-flicker';
@@ -943,9 +956,9 @@ export class GrowthRoadmaps {
     if (e.targeting_rules?.length && !e.targeting_rules.every(r => evalRule(r, this.#pk(), this.#c.customAttributes))) { this.#dbg('getVariant: targeting rules not matched for', name); return fb; }
     const pct = e.traffic_percentage ?? 100;
     const ex = pct < 100 && fnv1a(e.id + '::traffic::' + u) % 100 >= pct;
-    let v = this.#a.get(e.id);
-    if (!v) {
-      v = pickVariant(e, u, ex);
+    const prior = this.#a.get(e.id);
+    const v = resolveVariantForUser(e, u, ex, prior);
+    if (!prior || prior.id !== v.id) {
       this.#a.set(e.id, v);
       this.#dbg('getVariant: assigned', name, '→', v.name, ex ? '(traffic excluded)' : '');
     } else {
@@ -1067,9 +1080,9 @@ export class GrowthRoadmaps {
       if (e.targeting_rules?.length && !e.targeting_rules.every(r => evalRule(r, this.#pk(), this.#c.customAttributes))) continue;
       const pct = e.traffic_percentage ?? 100;
       const ex = pct < 100 && fnv1a(e.id + '::traffic::' + u) % 100 >= pct;
-      let v = this.#a.get(e.id);
-      if (!v) {
-        v = pickVariant(e, u, ex);
+      const prior = this.#a.get(e.id);
+      const v = resolveVariantForUser(e, u, ex, prior);
+      if (!prior || prior.id !== v.id) {
         this.#a.set(e.id, v);
         assigned = true;
         this.#dbg('applyRedirect: assigned', e.name, '→', v.name, ex ? '(traffic excluded)' : '');
@@ -1118,9 +1131,9 @@ export class GrowthRoadmaps {
       if (e.targeting_rules?.length && !e.targeting_rules.every(r => evalRule(r, this.#pk(), this.#c.customAttributes))) { this.#dbg('applyClient: targeting rules not matched for', e.name); continue; }
       const pct = e.traffic_percentage ?? 100;
       const ex = pct < 100 && fnv1a(e.id + '::traffic::' + u) % 100 >= pct;
-      let v = this.#a.get(e.id);
-      if (!v) {
-        v = pickVariant(e, u, ex);
+      const prior = this.#a.get(e.id);
+      const v = resolveVariantForUser(e, u, ex, prior);
+      if (!prior || prior.id !== v.id) {
         this.#a.set(e.id, v);
         assigned = true;
         this.#dbg('applyClient: assigned', e.name, '→', v.name, ex ? '(traffic excluded)' : '');
@@ -1162,8 +1175,9 @@ export class GrowthRoadmaps {
       if (e.targeting_rules?.length && !e.targeting_rules.every(r => evalRule(r, this.#pk(), this.#c.customAttributes))) continue;
       const pct = e.traffic_percentage ?? 100;
       if (pct < 100 && fnv1a(e.id + '::traffic::' + u) % 100 >= pct) continue;
-      let v = this.#a.get(e.id);
-      if (!v) { v = pickVariant(e, u, false); this.#a.set(e.id, v); assigned = true; }
+      const prior = this.#a.get(e.id);
+      const v = resolveVariantForUser(e, u, false, prior);
+      if (!prior || prior.id !== v.id) { this.#a.set(e.id, v); assigned = true; }
       addCss(v, e.id, this.#sm);
       if ((v.js || (v.external_js && v.external_js.length)) && (this.#c.mutationObserver === false || !v.selectors?.length || selectorMatchesNow(v.selectors))) this.#runVariantJs(v);
       if (this.#ht) this.#ht.setVariantId(v.id);

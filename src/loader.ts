@@ -101,13 +101,39 @@
     }
 
     if (cachedCfg) {
+      var expById: Record<string, any> = {};
+      if (cachedCfg.experiments) {
+        for (var ei = 0; ei < cachedCfg.experiments.length; ei++) {
+          var cexp = cachedCfg.experiments[ei];
+          if (cexp && cexp.id) expById[cexp.id] = cexp;
+        }
+      }
       var raw = localStorage.getItem('ab_va_' + pk);
       if (raw) {
         var assignments = JSON.parse(raw);
         var applied = false;
         for (var eid in assignments) {
           if (!eligible[eid]) continue;
+          var expCfg = expById[eid];
           var a = assignments[eid];
+          // During rollout, ignore the stale bucket assignment and pre-apply the winner.
+          if (expCfg && expCfg.status === 'rolling_out' && expCfg.rollout_variant_id && expCfg.variants) {
+            a = null;
+            for (var rvi = 0; rvi < expCfg.variants.length; rvi++) {
+              if (expCfg.variants[rvi].id === expCfg.rollout_variant_id) {
+                var rv = expCfg.variants[rvi];
+                a = {
+                  variantId: rv.id,
+                  css: rv.css || null,
+                  external_css: rv.external_css || null,
+                  redirect_url: rv.redirect_url || null,
+                  is_control: !!rv.is_control,
+                };
+                break;
+              }
+            }
+          }
+          if (!a) continue;
           if (a && a.external_css && a.external_css.length) {
             for (var k = 0; k < a.external_css.length; k++) {
               if (!D.querySelector('link[data-ab-ext-css="' + a.variantId + '"][href="' + a.external_css[k] + '"]')) {
@@ -145,7 +171,7 @@
             var loopVarId = spLoopCheck.get('_ab_var');
             for (var ri = 0; ri < cachedCfg.experiments.length; ri++) {
               var rexp = cachedCfg.experiments[ri];
-              if (!rexp || rexp.mode !== 'redirect' || rexp.status !== 'running') continue;
+              if (!rexp || rexp.mode !== 'redirect' || (rexp.status !== 'running' && rexp.status !== 'rolling_out')) continue;
               if (!passR(rexp.url_rules)) continue;
               var rasn = assignments[rexp.id];
               if (!rasn || !rasn.variantId) continue;
@@ -196,7 +222,7 @@
             var existingAss = rawAss ? JSON.parse(rawAss) : {};
             for (var ni = 0; ni < cachedCfg.experiments.length; ni++) {
               var nexp = cachedCfg.experiments[ni];
-              if (!nexp || nexp.mode !== 'redirect' || nexp.status !== 'running') continue;
+              if (!nexp || nexp.mode !== 'redirect' || (nexp.status !== 'running' && nexp.status !== 'rolling_out')) continue;
               if (!passR(nexp.url_rules)) continue;
               // Only act if there is NO saved assignment for this experiment
               if (existingAss[nexp.id] && existingAss[nexp.id].variantId) continue;
@@ -207,7 +233,14 @@
               var ntpct = nexp.traffic_percentage != null ? nexp.traffic_percentage : 100;
               if (ntpct < 100 && (loaderFnv1a(nexp.id + '::traffic::' + vid) % 100) >= ntpct) continue;
               // Bucket visitor deterministically
-              var nv = loaderAssignVariant(nexp.id, vid, nexp.variants);
+              var nv = (nexp.status === 'rolling_out' && nexp.rollout_variant_id)
+                ? (function() {
+                    for (var rj = 0; rj < nexp.variants.length; rj++) {
+                      if (nexp.variants[rj].id === nexp.rollout_variant_id) return nexp.variants[rj];
+                    }
+                    return null;
+                  })()
+                : loaderAssignVariant(nexp.id, vid, nexp.variants);
               if (!nv || nv.is_control || !nv.redirect_url) continue;
               // Skip if already on destination
               var ndestObj = loaderResolveUrl(nv.redirect_url);
