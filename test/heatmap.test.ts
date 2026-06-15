@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { HeatmapTracker } from '../src/heatmap';
+import { DEAD_CLICK_VERIFY_MS } from '../src/click-interactivity';
 import type { EventBatcher } from '../src/batcher';
 
 function makeBatcher(): EventBatcher & { pushed: unknown[] } {
@@ -140,7 +141,8 @@ describe('HeatmapTracker — click event batching', () => {
     expect(evt.variant_id).toBe('');
   });
 
-  it('click metadata contains x, y, viewport dimensions, and element info', () => {
+  it('click metadata contains x, y, viewport dimensions, and element info', async () => {
+    vi.useFakeTimers();
     const batcher = makeBatcher();
     tracker = makeTracker(batcher);
 
@@ -148,7 +150,11 @@ describe('HeatmapTracker — click event batching', () => {
     document.body.appendChild(btn);
     fireClick(btn, 50, 80);
 
-    const evt = batcher.pushed[0] as { metadata: Record<string, unknown> };
+    await vi.advanceTimersByTimeAsync(DEAD_CLICK_VERIFY_MS);
+
+    const evt = batcher.pushed.find(
+      (e) => (e as { type: string }).type === 'heatmap_click',
+    ) as { metadata: Record<string, unknown> };
     const md = evt.metadata;
     expect(md).toBeDefined();
     expect(typeof md.x).toBe('number');
@@ -156,22 +162,10 @@ describe('HeatmapTracker — click event batching', () => {
     expect(typeof md.viewport_width).toBe('number');
     expect(typeof md.viewport_height).toBe('number');
     expect(md.element_tag).toBe('button');
+    vi.useRealTimers();
   });
 
-  it('marks clicks on button elements as interactive and not dead clicks', () => {
-    const batcher = makeBatcher();
-    tracker = makeTracker(batcher);
-
-    const btn = document.createElement('button');
-    document.body.appendChild(btn);
-    fireClick(btn);
-
-    const md = (batcher.pushed[0] as { metadata: Record<string, unknown> }).metadata;
-    expect(md.is_interactive).toBe(true);
-    expect(md.is_dead_click).toBe(false);
-  });
-
-  it('marks clicks on plain divs as non-interactive dead clicks', () => {
+  it('emits plain div clicks immediately as non-clickable (not dead)', () => {
     const batcher = makeBatcher();
     tracker = makeTracker(batcher);
 
@@ -179,35 +173,10 @@ describe('HeatmapTracker — click event batching', () => {
     document.body.appendChild(div);
     fireClick(div);
 
+    expect(batcher.pushed.length).toBe(1);
     const md = (batcher.pushed[0] as { metadata: Record<string, unknown> }).metadata;
     expect(md.is_interactive).toBe(false);
-    expect(md.is_dead_click).toBe(true);
-  });
-
-  it('marks clicks on elements with role="button" as interactive', () => {
-    const batcher = makeBatcher();
-    tracker = makeTracker(batcher);
-
-    const span = document.createElement('span');
-    span.setAttribute('role', 'button');
-    document.body.appendChild(span);
-    fireClick(span);
-
-    const md = (batcher.pushed[0] as { metadata: Record<string, unknown> }).metadata;
-    expect(md.is_interactive).toBe(true);
-  });
-
-  it('marks clicks on anchor tags as interactive', () => {
-    const batcher = makeBatcher();
-    tracker = makeTracker(batcher);
-
-    const a = document.createElement('a');
-    a.href = '#';
-    document.body.appendChild(a);
-    fireClick(a);
-
-    const md = (batcher.pushed[0] as { metadata: Record<string, unknown> }).metadata;
-    expect(md.is_interactive).toBe(true);
+    expect(md.is_dead_click).toBe(false);
   });
 
   it('detects rage clicks when 3+ nearby clicks occur within 1 second', () => {
@@ -277,6 +246,156 @@ describe('HeatmapTracker — click event batching', () => {
     const evt = batcher.pushed[0] as { timestamp: string };
     expect(() => new Date(evt.timestamp)).not.toThrow();
     expect(new Date(evt.timestamp).toISOString()).toBe(evt.timestamp);
+  });
+});
+
+describe('HeatmapTracker — deferred dead click detection', () => {
+  let tracker: HeatmapTracker;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    tracker?.destroy();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  async function advanceDeadClickWindow(): Promise<void> {
+    await vi.advanceTimersByTimeAsync(DEAD_CLICK_VERIFY_MS);
+  }
+
+  it('flags broken button as dead click after verification window', async () => {
+    const batcher = makeBatcher();
+    tracker = makeTracker(batcher);
+
+    const btn = document.createElement('button');
+    document.body.appendChild(btn);
+    fireClick(btn);
+
+    expect(batcher.pushed.length).toBe(0);
+    await advanceDeadClickWindow();
+
+    expect(batcher.pushed.length).toBe(1);
+    const md = (batcher.pushed[0] as { metadata: Record<string, unknown> }).metadata;
+    expect(md.is_dead_click).toBe(true);
+    expect(md.is_interactive).toBe(false);
+  });
+
+  it('does not flag pointer div with click handler as dead click', async () => {
+    const batcher = makeBatcher();
+    tracker = makeTracker(batcher);
+
+    const div = document.createElement('div');
+    div.style.cursor = 'pointer';
+    div.addEventListener('click', () => {
+      div.textContent = 'clicked';
+    });
+    document.body.appendChild(div);
+    fireClick(div);
+
+    await advanceDeadClickWindow();
+
+    expect(batcher.pushed.length).toBe(1);
+    const md = (batcher.pushed[0] as { metadata: Record<string, unknown> }).metadata;
+    expect(md.is_dead_click).toBe(false);
+    expect(md.is_interactive).toBe(true);
+  });
+
+  it('flags pointer div with no handler as dead click', async () => {
+    const batcher = makeBatcher();
+    tracker = makeTracker(batcher);
+
+    const div = document.createElement('div');
+    div.style.cursor = 'pointer';
+    document.body.appendChild(div);
+    fireClick(div);
+
+    await advanceDeadClickWindow();
+
+    expect(batcher.pushed.length).toBe(1);
+    const md = (batcher.pushed[0] as { metadata: Record<string, unknown> }).metadata;
+    expect(md.is_dead_click).toBe(true);
+    expect(md.is_interactive).toBe(false);
+  });
+
+  it('defers clickable-looking elements before emitting', async () => {
+    const batcher = makeBatcher();
+    tracker = makeTracker(batcher);
+
+    const span = document.createElement('span');
+    span.setAttribute('role', 'button');
+    document.body.appendChild(span);
+    fireClick(span);
+
+    expect(batcher.pushed.length).toBe(0);
+    await advanceDeadClickWindow();
+    expect(batcher.pushed.length).toBe(1);
+    expect((batcher.pushed[0] as { metadata: Record<string, unknown> }).metadata.is_dead_click).toBe(true);
+  });
+
+  it('preserves original click timestamp on deferred emit', async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const batcher = makeBatcher();
+    tracker = makeTracker(batcher);
+
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+
+    const btn = document.createElement('button');
+    document.body.appendChild(btn);
+    fireClick(btn);
+
+    await advanceDeadClickWindow();
+
+    const evt = batcher.pushed[0] as { timestamp: string };
+    expect(evt.timestamp).toBe(new Date(now).toISOString());
+  });
+
+  it('cancels pending dead check on destroy without emitting', async () => {
+    const batcher = makeBatcher();
+    tracker = makeTracker(batcher);
+
+    const btn = document.createElement('button');
+    document.body.appendChild(btn);
+    fireClick(btn);
+
+    tracker.destroy();
+    await advanceDeadClickWindow();
+
+    const clickEvents = batcher.pushed.filter(
+      (e) => (e as { type: string }).type === 'heatmap_click',
+    );
+    expect(clickEvents.length).toBe(0);
+  });
+
+  it('flags rage clicks on broken buttons as both rage and dead', async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const batcher = makeBatcher();
+    tracker = makeTracker(batcher);
+
+    const btn = document.createElement('button');
+    document.body.appendChild(btn);
+
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+
+    fireClick(btn, 50, 50);
+    fireClick(btn, 52, 50);
+    fireClick(btn, 51, 52);
+
+    await advanceDeadClickWindow();
+
+    const events = batcher.pushed as Array<{ metadata: Record<string, unknown> }>;
+    expect(events.length).toBe(3);
+    const lastMd = events[events.length - 1].metadata;
+    expect(lastMd.is_rage_click).toBe(true);
+    expect(lastMd.is_dead_click).toBe(true);
   });
 });
 

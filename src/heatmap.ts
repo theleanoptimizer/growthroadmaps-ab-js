@@ -1,4 +1,11 @@
 import { EventBatcher } from './batcher';
+import {
+  captureClickBaseline,
+  DEAD_CLICK_VERIFY_MS,
+  hadMeaningfulResponse,
+  looksClickable,
+  type ClickOutcomeBaseline,
+} from './click-interactivity';
 import { HeatmapClickEvent, HeatmapScrollEvent, HeatmapAttentionEvent, HeatmapUrlRule } from './types';
 
 interface ClickRecord {
@@ -7,14 +14,19 @@ interface ClickRecord {
   t: number;
 }
 
+interface PendingDeadCheck {
+  timeoutId: ReturnType<typeof setTimeout>;
+  baseline: ClickOutcomeBaseline;
+  target: Element;
+  evt: HeatmapClickEvent;
+}
+
 interface CompiledUrlRule {
   match_type: string;
   value: string;
   regex?: RegExp;
 }
 
-const INTERACTIVE_TAGS = new Set(['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'SUMMARY', 'DETAILS']);
-const INTERACTIVE_ROLES = new Set(['button', 'link', 'tab', 'menuitem', 'checkbox', 'radio', 'switch']);
 const RAGE_RADIUS = 30;
 const RAGE_COUNT = 3;
 const RAGE_WINDOW = 1000;
@@ -29,15 +41,6 @@ function getSelector(el: Element): string {
   const siblings = Array.from(parent.children).filter(c => c.tagName === el.tagName);
   const idx = siblings.length > 1 ? `:nth-child(${Array.from(parent.children).indexOf(el) + 1})` : '';
   return cls ? `${tag}.${cls}${idx}` : `${tag}${idx}`;
-}
-
-function isInteractive(el: Element): boolean {
-  if (INTERACTIVE_TAGS.has(el.tagName)) return true;
-  const role = el.getAttribute('role');
-  if (role && INTERACTIVE_ROLES.has(role)) return true;
-  if (el.hasAttribute('onclick') || el.hasAttribute('tabindex')) return true;
-  if (el.closest('a, button, [role="button"], input, select, textarea')) return true;
-  return false;
 }
 
 function deviceType(): string {
@@ -80,6 +83,7 @@ export class HeatmapTracker {
   #attentionBuckets: number[] = new Array(ATTENTION_BUCKETS).fill(0);
   #attentionTimer: ReturnType<typeof setInterval> | null = null;
   #attentionSent = false;
+  #pendingDeadChecks = new Set<PendingDeadCheck>();
 
   constructor(
     batcher: EventBatcher,
@@ -139,6 +143,48 @@ export class HeatmapTracker {
     this.#batcher.push(e);
   }
 
+  #finalizeDeadCheck(pending: PendingDeadCheck): void {
+    this.#pendingDeadChecks.delete(pending);
+    const responded = hadMeaningfulResponse(pending.baseline, pending.target);
+    const isDeadClick = !responded;
+    const md = pending.evt.metadata as Record<string, unknown>;
+    md.is_dead_click = isDeadClick;
+    md.is_interactive = !isDeadClick;
+    this.#push(pending.evt);
+  }
+
+  #cancelPendingDeadChecks(): void {
+    for (const pending of this.#pendingDeadChecks) {
+      clearTimeout(pending.timeoutId);
+    }
+    this.#pendingDeadChecks.clear();
+  }
+
+  #flushPendingDeadChecks(): void {
+    const pending = [...this.#pendingDeadChecks];
+    for (const check of pending) {
+      clearTimeout(check.timeoutId);
+      this.#finalizeDeadCheck(check);
+    }
+  }
+
+  #scheduleDeadClickCheck(target: Element, evt: HeatmapClickEvent): void {
+    const baseline = captureClickBaseline(target);
+    const pending: PendingDeadCheck = {
+      timeoutId: 0 as unknown as ReturnType<typeof setTimeout>,
+      baseline,
+      target,
+      evt,
+    };
+
+    pending.timeoutId = setTimeout(() => {
+      if (!this.#pendingDeadChecks.has(pending)) return;
+      this.#finalizeDeadCheck(pending);
+    }, DEAD_CLICK_VERIFY_MS);
+
+    this.#pendingDeadChecks.add(pending);
+  }
+
   #attachClickListener(): void {
     const handler = (e: MouseEvent) => {
       if (!this.#tracking) return;
@@ -154,8 +200,7 @@ export class HeatmapTracker {
       const x = (scrollLeft + e.clientX) / Math.max(document.documentElement.scrollWidth, 1);
       const y = (scrollTop + e.clientY) / pageHeight;
       const now = Date.now();
-      const interactive = isInteractive(target);
-      const deadClick = !interactive;
+      const clickable = looksClickable(target);
 
       this.#ringBuffer.push({ x: e.clientX, y: e.clientY, t: now });
       if (this.#ringBuffer.length > 10) this.#ringBuffer.shift();
@@ -172,12 +217,13 @@ export class HeatmapTracker {
         }
       }
 
+      const clickTimestamp = new Date(now).toISOString();
       const evt: HeatmapClickEvent = {
         type: 'heatmap_click',
         variant_id: this.#variantId || '',
         user_id: this.#userId,
         session_id: this.#sessionId,
-        timestamp: new Date().toISOString(),
+        timestamp: clickTimestamp,
         metadata: {
           page_url: this.#currentPageUrl,
           x,
@@ -186,14 +232,20 @@ export class HeatmapTracker {
           viewport_height: vh,
           element_selector: getSelector(target),
           element_tag: target.tagName.toLowerCase(),
-          is_interactive: interactive,
+          is_interactive: false,
           is_rage_click: rageClick,
-          is_dead_click: deadClick,
+          is_dead_click: false,
           device_type: deviceType(),
         },
       };
 
-      this.#push(evt);
+      if (!clickable) {
+        this.#push(evt);
+        return;
+      }
+
+      (evt.metadata as Record<string, unknown>).is_interactive = true;
+      this.#scheduleDeadClickCheck(target, evt);
     };
 
     document.addEventListener('click', handler, { passive: true, capture: true });
@@ -330,24 +382,27 @@ export class HeatmapTracker {
   #attachUnloadListener(): void {
     const onHidden = () => {
       if (document.visibilityState === 'hidden') {
+        this.#flushPendingDeadChecks();
         this.#sendScrollEvent();
         this.#sendAttentionEvent();
       }
     };
     const onUnload = () => {
+      this.#flushPendingDeadChecks();
       this.#sendScrollEvent();
       this.#sendAttentionEvent();
     };
 
     document.addEventListener('visibilitychange', onHidden);
-    window.addEventListener('beforeunload', onUnload);
+    window.addEventListener('pagehide', onUnload);
     this.#cleanups.push(() => {
       document.removeEventListener('visibilitychange', onHidden);
-      window.removeEventListener('beforeunload', onUnload);
+      window.removeEventListener('pagehide', onUnload);
     });
   }
 
   pageChanged(): void {
+    this.#cancelPendingDeadChecks();
     this.#sendScrollEvent();
     this.#sendAttentionEvent();
     this.#currentPageUrl = window.location.href;
@@ -365,6 +420,7 @@ export class HeatmapTracker {
   }
 
   destroy(): void {
+    this.#cancelPendingDeadChecks();
     this.#sendScrollEvent();
     this.#sendAttentionEvent();
     for (const fn of this.#cleanups) fn();

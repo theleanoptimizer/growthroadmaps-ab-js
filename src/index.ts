@@ -48,6 +48,7 @@ import { EventBatcher } from './batcher';
 import { getAntiFlickerSnippet, revealPage } from './anti-flicker';
 import type { HeatmapTracker } from './heatmap';
 import type { FormTracker } from './form-tracker';
+import type { SessionTracker } from './session-tracker';
 import type { SurveyManager } from './survey';
 import type { SurveyData } from './types';
 import type { setupGoals as _setupGoals, checkUrlGoals as _checkUrlGoals, GoalContext } from './goals';
@@ -59,6 +60,7 @@ interface LazyModule<T> {
 
 type HeatmapModule = { HeatmapTracker: typeof HeatmapTracker };
 type FormTrackerModule = { FormTracker: typeof FormTracker };
+type SessionTrackerModule = { SessionTracker: typeof SessionTracker };
 type SurveyModule = { SurveyManager: typeof SurveyManager };
 type GoalsModule = { setupGoals: typeof _setupGoals; checkUrlGoals: typeof _checkUrlGoals };
 type AudienceModule = { setupAudience: typeof _setupAudience };
@@ -383,6 +385,7 @@ export class GrowthRoadmaps {
   #mo: MutationObserver | null = null;
   #ht: HeatmapTracker | null = null;
   #ft: FormTracker | null = null;
+  #st: SessionTracker | null = null;
   #hc: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; sampling_rate?: number }> = [];
   #fac: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; form_selectors?: string[] }> = [];
   #sv: SurveyManager | null = null;
@@ -617,6 +620,24 @@ export class GrowthRoadmaps {
     const mod = await import('./form-tracker') as FormTrackerModule & LazyModule<FormTrackerModule>;
     const resolved = typeof mod.__lazyLoad === 'function' ? await mod.__lazyLoad() : mod;
     this.#ft = new resolved.FormTracker(this.#b, this.#c.userId || this.#c.sessionId || '', this.#c.sessionId, () => this.#consent, formConfigs);
+  }
+
+  async #initSessionTracker(): Promise<void> {
+    if (!D) return;
+    const mod = await import('./session-tracker') as SessionTrackerModule & LazyModule<SessionTrackerModule>;
+    const resolved = typeof mod.__lazyLoad === 'function' ? await mod.__lazyLoad() : mod;
+    this.#st = new resolved.SessionTracker(
+      this.#b,
+      this.#c.userId || this.#c.sessionId || '',
+      this.#c.sessionId || '',
+      () => this.#consent,
+      () => this.#p?.session_analysis_enabled !== false && this.#p?.heatmaps_enabled !== false,
+    );
+    if (this.#a.size > 0) {
+      const lastVariant = [...this.#a.values()].pop();
+      if (lastVariant) this.#st.setVariantId(lastVariant.id);
+    }
+    this.#st.start();
   }
 
   #pk(): string { return this.#c.projectKey || ''; }
@@ -891,6 +912,10 @@ export class GrowthRoadmaps {
           }
           formConfigs.push(...this.#fac.map(c => ({ capture_mode: 'specific', url_rules: c.url_rules || [], form_selectors: (c.form_selectors || []) as string[] })));
           this.#initFormTracker(formConfigs);
+        }
+
+        if (this.#p?.session_analysis_enabled !== false) {
+          this.#initSessionTracker();
         }
       }
       if (!this.#pv && this.#c.surveys && this.#p?.surveys_enabled !== false) {

@@ -77,7 +77,17 @@ export interface ConversionEvent {
   timestamp: string;
 }
 
-export type ABEvent = ExposureEvent | ConversionEvent | HeatmapClickEvent | HeatmapScrollEvent | HeatmapFormEvent | HeatmapAttentionEvent;
+export type ABEvent = ExposureEvent | ConversionEvent | HeatmapClickEvent | HeatmapScrollEvent | HeatmapFormEvent | HeatmapAttentionEvent | SessionEvent;
+
+export interface SessionEvent {
+  type: 'session_page_view' | 'session_visibility' | 'session_navigation' | 'session_error' | 'session_goal_fired';
+  experiment_id?: string;
+  variant_id?: string;
+  user_id: string;
+  session_id?: string;
+  timestamp: string;
+  metadata?: Record<string, unknown>;
+}
 
 export interface HeatmapClickEvent {
   type: 'heatmap_click';
@@ -148,6 +158,7 @@ export interface ProjectInfo {
   form_analytics_all_forms_enabled?: boolean;
   heatmaps_enabled?: boolean;
   surveys_enabled?: boolean;
+  session_analysis_enabled?: boolean;
 }
 
 export interface AudienceAttributeConfig {
