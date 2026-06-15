@@ -2,6 +2,18 @@ import { EventBatcher } from './batcher';
 
 type NavigationType = 'initial' | 'spa' | 'back' | 'forward';
 
+export interface FirstTouchAttribution {
+  referrer?: string;
+  utm_source?: string;
+  utm_medium?: string;
+  utm_campaign?: string;
+  utm_content?: string;
+  utm_term?: string;
+  gclid?: string;
+  fbclid?: string;
+  msclkid?: string;
+}
+
 function pathOnly(url: string): string {
   try {
     const u = new URL(url, window.location.origin);
@@ -16,6 +28,56 @@ function deviceType(): string {
   if (/Tablet|iPad/i.test(ua)) return 'tablet';
   if (/Mobi|Android/i.test(ua)) return 'mobile';
   return 'desktop';
+}
+
+function readParam(params: URLSearchParams, key: string): string | undefined {
+  const v = params.get(key);
+  return v && v.trim() ? v.trim() : undefined;
+}
+
+function captureFirstTouchFromPage(): FirstTouchAttribution {
+  const out: FirstTouchAttribution = {};
+  try {
+    out.referrer = document.referrer?.slice(0, 500) || undefined;
+    const params = new URLSearchParams(window.location.search);
+    out.utm_source = readParam(params, 'utm_source');
+    out.utm_medium = readParam(params, 'utm_medium');
+    out.utm_campaign = readParam(params, 'utm_campaign');
+    out.utm_content = readParam(params, 'utm_content');
+    out.utm_term = readParam(params, 'utm_term');
+    out.gclid = readParam(params, 'gclid');
+    out.fbclid = readParam(params, 'fbclid');
+    out.msclkid = readParam(params, 'msclkid');
+  } catch { /* ignore */ }
+  return out;
+}
+
+export function firstTouchStorageKey(projectKey: string): string {
+  return `_gr_sa_attr_${projectKey || 'default'}`;
+}
+
+export function loadFirstTouchAttribution(projectKey: string): FirstTouchAttribution | null {
+  try {
+    const raw = sessionStorage.getItem(firstTouchStorageKey(projectKey));
+    if (!raw) return null;
+    return JSON.parse(raw) as FirstTouchAttribution;
+  } catch {
+    return null;
+  }
+}
+
+export function saveFirstTouchAttribution(projectKey: string, attrs: FirstTouchAttribution): void {
+  try {
+    sessionStorage.setItem(firstTouchStorageKey(projectKey), JSON.stringify(attrs));
+  } catch { /* ignore quota */ }
+}
+
+export function getOrCaptureFirstTouch(projectKey: string): FirstTouchAttribution {
+  const existing = loadFirstTouchAttribution(projectKey);
+  if (existing) return existing;
+  const captured = captureFirstTouchFromPage();
+  saveFirstTouchAttribution(projectKey, captured);
+  return captured;
 }
 
 const SENSITIVE_SELECTOR_RE =
@@ -46,6 +108,7 @@ export class SessionTracker {
   #batcher: EventBatcher;
   #userId: string;
   #sessionId: string;
+  #projectKey: string;
   #consent: () => boolean;
   #enabled: () => boolean;
   #variantId?: string;
@@ -54,6 +117,7 @@ export class SessionTracker {
   #lastPageEnter = Date.now();
   #originalPushState?: History['pushState'];
   #originalReplaceState?: History['replaceState'];
+  #initialAttributionSent = false;
 
   constructor(
     batcher: EventBatcher,
@@ -61,10 +125,12 @@ export class SessionTracker {
     sessionId: string,
     consent: () => boolean,
     enabled: () => boolean,
+    projectKey = '',
   ) {
     this.#batcher = batcher;
     this.#userId = userId;
     this.#sessionId = sessionId;
+    this.#projectKey = projectKey;
     this.#consent = consent;
     this.#enabled = enabled;
   }
@@ -100,6 +166,23 @@ export class SessionTracker {
     };
   }
 
+  #attributionMeta(navigationType: NavigationType): Record<string, unknown> {
+    if (navigationType !== 'initial' || this.#initialAttributionSent) return {};
+    const attrs = getOrCaptureFirstTouch(this.#projectKey);
+    this.#initialAttributionSent = true;
+    const meta: Record<string, unknown> = {};
+    if (attrs.referrer) meta.referrer = attrs.referrer;
+    if (attrs.utm_source) meta.utm_source = attrs.utm_source;
+    if (attrs.utm_medium) meta.utm_medium = attrs.utm_medium;
+    if (attrs.utm_campaign) meta.utm_campaign = attrs.utm_campaign;
+    if (attrs.utm_content) meta.utm_content = attrs.utm_content;
+    if (attrs.utm_term) meta.utm_term = attrs.utm_term;
+    if (attrs.gclid) meta.gclid = attrs.gclid;
+    if (attrs.fbclid) meta.fbclid = attrs.fbclid;
+    if (attrs.msclkid) meta.msclkid = attrs.msclkid;
+    return meta;
+  }
+
   #emitPageView(navigationType: NavigationType): void {
     if (!this.#canTrack()) return;
     const pageUrl = pathOnly(window.location.href);
@@ -113,6 +196,7 @@ export class SessionTracker {
       timestamp: new Date().toISOString(),
       metadata: {
         ...this.#baseMeta(pageUrl),
+        ...this.#attributionMeta(navigationType),
         page_title: document.title?.slice(0, 200),
         navigation_type: navigationType,
         time_on_previous_page_ms: timeOnPrevious,
@@ -144,6 +228,7 @@ export class SessionTracker {
   #bindVisibility(): void {
     const onVis = () => {
       if (!this.#canTrack()) return;
+      if (!document.hidden) return;
       this.#batcher.push({
         type: 'session_visibility',
         user_id: this.#userId,

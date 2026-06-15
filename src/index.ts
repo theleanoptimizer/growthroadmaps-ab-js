@@ -632,6 +632,7 @@ export class GrowthRoadmaps {
       this.#c.sessionId || '',
       () => this.#consent,
       () => this.#p?.session_analysis_enabled !== false && this.#p?.heatmaps_enabled !== false,
+      this.#pk(),
     );
     if (this.#a.size > 0) {
       const lastVariant = [...this.#a.values()].pop();
