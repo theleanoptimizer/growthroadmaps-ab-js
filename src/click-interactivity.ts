@@ -62,7 +62,7 @@ function collectAriaStates(el: Element): string[] {
 
 function countBodyDialogs(): number {
   let count = 0;
-  for (const child of document.body.children) {
+  for (const child of Array.from(document.body.children)) {
     if (!(child instanceof Element)) continue;
     const role = child.getAttribute('role');
     if (role === 'dialog' || role === 'alertdialog') count++;
