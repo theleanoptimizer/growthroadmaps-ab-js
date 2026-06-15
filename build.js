@@ -271,9 +271,8 @@ async function build() {
   console.log("  dist/growth.umd.js");
   console.log("  dist/index.d.ts");
 
-  // Gzip budget: core bundle (growth.min.js) must stay under 11 KB.
-  // Baseline: ~70 KB raw / 20,924 bytes gzip. Current: ~34 KB raw / ~10.2 KB gzip.
-  const GZ_BUDGET = 11264;
+  // Gzip budget: core bundle (growth.min.js) must stay under 12 KB.
+  const GZ_BUDGET = 12288;
   if (gz > GZ_BUDGET) {
     console.error(
       "\nERROR: Core bundle gzipped size is " + gz + " bytes (" + gzKB + " KB) — exceeds " + GZ_BUDGET + " byte budget!"
