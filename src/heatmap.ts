@@ -79,7 +79,7 @@ export class HeatmapTracker {
   #compiledRuleSets: CompiledUrlRule[][];
   #tracking = false;
   #trackAllPages: boolean;
-  #samplingRate: number;
+  #sessionSampled: boolean;
   #attentionBuckets: number[] = new Array(ATTENTION_BUCKETS).fill(0);
   #attentionTimer: ReturnType<typeof setInterval> | null = null;
   #attentionSent = false;
@@ -92,7 +92,8 @@ export class HeatmapTracker {
     consentCheck: () => boolean,
     urlRuleSets: Array<Array<HeatmapUrlRule>>,
     trackAllPages = false,
-    samplingRate = 1.0,
+    _samplingRate = 1.0,
+    sessionSampled = true,
   ) {
     this.#batcher = batcher;
     this.#userId = userId;
@@ -100,7 +101,7 @@ export class HeatmapTracker {
     this.#consent = consentCheck;
     this.#currentPageUrl = window.location.href;
     this.#trackAllPages = trackAllPages;
-    this.#samplingRate = samplingRate;
+    this.#sessionSampled = sessionSampled;
 
     this.#compiledRuleSets = urlRuleSets.map(ruleSet =>
       ruleSet.map(rule => {
@@ -139,7 +140,7 @@ export class HeatmapTracker {
 
   #push(e: HeatmapClickEvent | HeatmapScrollEvent): void {
     if (!this.#consent()) return;
-    if (Math.random() > this.#samplingRate) return;
+    if (!this.#sessionSampled) return;
     this.#batcher.push(e);
   }
 
@@ -374,7 +375,7 @@ export class HeatmapTracker {
         })(),
       },
     };
-    if (Math.random() <= this.#samplingRate) {
+    if (this.#sessionSampled) {
       this.#batcher.push(evt);
     }
   }

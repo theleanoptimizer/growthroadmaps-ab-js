@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { HeatmapTracker } from '../src/heatmap';
+import { DEAD_CLICK_VERIFY_MS } from '../src/click-interactivity';
 import type { EventBatcher } from '../src/batcher';
 
 function makeBatcher(): EventBatcher & { pushed: unknown[] } {
@@ -14,7 +15,9 @@ function makeBatcher(): EventBatcher & { pushed: unknown[] } {
   } as unknown as EventBatcher & { pushed: unknown[] };
 }
 
-function makeTracker(samplingRate: number, batcher: EventBatcher) {
+function makeTracker(samplingRate: number, batcher: EventBatcher, sessionSampled?: boolean) {
+  const sampled =
+    sessionSampled ?? (samplingRate >= 1 ? true : samplingRate <= 0 ? false : true);
   return new HeatmapTracker(
     batcher,
     'user-1',
@@ -23,56 +26,49 @@ function makeTracker(samplingRate: number, batcher: EventBatcher) {
     [[{ match_type: 'contains', value: '/' }]],
     false,
     samplingRate,
+    sampled,
   );
 }
 
 describe('HeatmapTracker sampling gate', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.useFakeTimers();
   });
 
-  function fireClick(x = 100, y = 200) {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function fireClick(x = 100, y = 200) {
     const el = document.createElement('button');
     document.body.appendChild(el);
     el.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }));
+    await vi.advanceTimersByTimeAsync(DEAD_CLICK_VERIFY_MS);
     document.body.removeChild(el);
   }
 
-  it('drops all events when samplingRate = 0', () => {
-    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  it('drops all events when session is not sampled', async () => {
     const batcher = makeBatcher();
-    const tracker = makeTracker(0, batcher);
-    fireClick();
+    const tracker = makeTracker(0.5, batcher, false);
+    await fireClick();
     expect(batcher.pushed.length).toBe(0);
     tracker.destroy();
   });
 
-  it('keeps all events when samplingRate = 1.0', () => {
-    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  it('keeps all events when session is sampled', async () => {
     const batcher = makeBatcher();
-    const tracker = makeTracker(1.0, batcher);
-    fireClick();
+    const tracker = makeTracker(0.5, batcher, true);
+    await fireClick();
     expect(batcher.pushed.length).toBe(1);
     tracker.destroy();
   });
 
-  it('drops approximately half events when samplingRate = 0.5', () => {
-    let call = 0;
-    vi.spyOn(Math, 'random').mockImplementation(() => {
-      call++;
-      return call % 2 === 0 ? 0.4 : 0.6;
-    });
+  it('keeps all events when samplingRate = 1.0', async () => {
     const batcher = makeBatcher();
-    const tracker = makeTracker(0.5, batcher);
-
-    const TOTAL = 200;
-    for (let i = 0; i < TOTAL; i++) {
-      fireClick(i, i);
-    }
-
-    const kept = batcher.pushed.length;
-    expect(kept).toBeGreaterThanOrEqual(TOTAL * 0.45);
-    expect(kept).toBeLessThanOrEqual(TOTAL * 0.55);
+    const tracker = makeTracker(1.0, batcher);
+    await fireClick();
+    expect(batcher.pushed.length).toBe(1);
     tracker.destroy();
   });
 });

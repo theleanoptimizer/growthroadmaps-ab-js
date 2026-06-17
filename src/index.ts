@@ -602,11 +602,25 @@ export class GrowthRoadmaps {
     this.#mo.observe(D.body, { childList: true, subtree: true });
   }
 
-  async #initHeatmap(urlRuleSets: Array<Array<{ match_type: string; value: string }>>, trackAllPages: boolean, samplingRate = 1.0): Promise<void> {
+  async #initHeatmap(
+    urlRuleSets: Array<Array<{ match_type: string; value: string }>>,
+    trackAllPages: boolean,
+    samplingRate = 1.0,
+    sessionSampled = true,
+  ): Promise<void> {
     if (!D || (urlRuleSets.length === 0 && !trackAllPages)) return;
     const mod = await import('./heatmap') as HeatmapModule & LazyModule<HeatmapModule>;
     const resolved = typeof mod.__lazyLoad === 'function' ? await mod.__lazyLoad() : mod;
-    this.#ht = new resolved.HeatmapTracker(this.#b, this.#c.userId || this.#c.sessionId || '', this.#c.sessionId, () => this.#consent, urlRuleSets, trackAllPages, samplingRate);
+    this.#ht = new resolved.HeatmapTracker(
+      this.#b,
+      this.#c.userId || this.#c.sessionId || '',
+      this.#c.sessionId,
+      () => this.#consent,
+      urlRuleSets,
+      trackAllPages,
+      samplingRate,
+      sessionSampled,
+    );
     // Backfill variant ID: getVariant() / #applyClientExperiments() may have run before
     // this async module finished loading, so this.#ht was null when setVariantId was called.
     if (this.#a.size > 0) {
@@ -901,9 +915,16 @@ export class GrowthRoadmaps {
         const ruleSets = this.#hc.map(c => c.url_rules || []);
         const rates = this.#hc.map(c => typeof c.sampling_rate === 'number' ? c.sampling_rate : 1.0);
         const effectiveSamplingRate = rates.length > 0 ? Math.min(...rates) : 1.0;
+        const wantsSessionAnalysis = this.#p?.session_analysis_enabled !== false;
+        const wantsHeatmap = ruleSets.length > 0 || hasAllPages;
+        let trackingSampled = true;
+        if (effectiveSamplingRate < 1 && (wantsHeatmap || wantsSessionAnalysis)) {
+          const { isTrackingSessionSampled } = await import('./tracking-sampling');
+          trackingSampled = isTrackingSessionSampled(this.#pk(), effectiveSamplingRate);
+        }
 
-        if (ruleSets.length > 0 || hasAllPages) {
-          this.#initHeatmap(ruleSets, hasAllPages, effectiveSamplingRate);
+        if (wantsHeatmap) {
+          this.#initHeatmap(ruleSets, hasAllPages, effectiveSamplingRate, trackingSampled);
         }
 
         if (this.#fac.length > 0 || hasAllForms) {
@@ -915,7 +936,7 @@ export class GrowthRoadmaps {
           this.#initFormTracker(formConfigs);
         }
 
-        if (this.#p?.session_analysis_enabled !== false) {
+        if (wantsSessionAnalysis && trackingSampled) {
           this.#initSessionTracker();
         }
       }
