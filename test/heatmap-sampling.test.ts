@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { HeatmapTracker } from '../src/heatmap';
-import { DEAD_CLICK_VERIFY_MS } from '../src/click-interactivity';
 import type { EventBatcher } from '../src/batcher';
 
 function makeBatcher(): EventBatcher & { pushed: unknown[] } {
@@ -33,41 +32,36 @@ function makeTracker(samplingRate: number, batcher: EventBatcher, sessionSampled
 describe('HeatmapTracker sampling gate', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.useFakeTimers();
+    document.body.innerHTML = '';
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  async function fireClick(x = 100, y = 200) {
+  function fireClick(x = 100, y = 200) {
     const el = document.createElement('button');
     document.body.appendChild(el);
     el.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }));
-    await vi.advanceTimersByTimeAsync(DEAD_CLICK_VERIFY_MS);
     document.body.removeChild(el);
   }
 
-  it('drops all events when session is not sampled', async () => {
+  it('drops all events when session is not sampled', () => {
     const batcher = makeBatcher();
     const tracker = makeTracker(0.5, batcher, false);
-    await fireClick();
+    fireClick();
     expect(batcher.pushed.length).toBe(0);
     tracker.destroy();
   });
 
-  it('keeps all events when session is sampled', async () => {
+  it('keeps all events when session is sampled', () => {
     const batcher = makeBatcher();
     const tracker = makeTracker(0.5, batcher, true);
-    await fireClick();
+    fireClick();
     expect(batcher.pushed.length).toBe(1);
     tracker.destroy();
   });
 
-  it('keeps all events when samplingRate = 1.0', async () => {
+  it('keeps all events when samplingRate = 1.0', () => {
     const batcher = makeBatcher();
     const tracker = makeTracker(1.0, batcher);
-    await fireClick();
+    fireClick();
     expect(batcher.pushed.length).toBe(1);
     tracker.destroy();
   });

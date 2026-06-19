@@ -1,4 +1,6 @@
 import { EventBatcher } from './batcher';
+import { registerClickHandler } from './click-delegate';
+import { getDeviceType, getCurrentPagePath, nowIso, setCurrentPagePath } from './session-context';
 
 type NavigationType = 'initial' | 'spa' | 'back' | 'forward';
 
@@ -12,22 +14,6 @@ export interface FirstTouchAttribution {
   gclid?: string;
   fbclid?: string;
   msclkid?: string;
-}
-
-function pathOnly(url: string): string {
-  try {
-    const u = new URL(url, window.location.origin);
-    return u.pathname + u.search;
-  } catch {
-    return url;
-  }
-}
-
-function deviceType(): string {
-  const ua = navigator.userAgent;
-  if (/Tablet|iPad/i.test(ua)) return 'tablet';
-  if (/Mobi|Android/i.test(ua)) return 'mobile';
-  return 'desktop';
 }
 
 function readParam(params: URLSearchParams, key: string): string | undefined {
@@ -104,6 +90,8 @@ export function sanitizeVisibleText(el: Element | null): string | undefined {
   return text.slice(0, 120) || undefined;
 }
 
+const SPA_PAGE_VIEW_DEBOUNCE_MS = 100;
+
 export class SessionTracker {
   #batcher: EventBatcher;
   #userId: string;
@@ -118,6 +106,7 @@ export class SessionTracker {
   #originalPushState?: History['pushState'];
   #originalReplaceState?: History['replaceState'];
   #initialAttributionSent = false;
+  #spaPageViewTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     batcher: EventBatcher,
@@ -141,6 +130,7 @@ export class SessionTracker {
 
   start(): void {
     if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    setCurrentPagePath();
     this.#emitPageView('initial');
     this.#patchHistory();
     this.#bindVisibility();
@@ -149,6 +139,10 @@ export class SessionTracker {
   }
 
   destroy(): void {
+    if (this.#spaPageViewTimer !== null) {
+      clearTimeout(this.#spaPageViewTimer);
+      this.#spaPageViewTimer = null;
+    }
     for (const c of this.#cleanups) c();
     this.#cleanups = [];
     if (this.#originalPushState) history.pushState = this.#originalPushState;
@@ -162,7 +156,7 @@ export class SessionTracker {
   #baseMeta(pageUrl: string): Record<string, unknown> {
     return {
       page_url: pageUrl,
-      device_type: deviceType(),
+      device_type: getDeviceType(),
     };
   }
 
@@ -185,7 +179,8 @@ export class SessionTracker {
 
   #emitPageView(navigationType: NavigationType): void {
     if (!this.#canTrack()) return;
-    const pageUrl = pathOnly(window.location.href);
+    setCurrentPagePath();
+    const pageUrl = getCurrentPagePath();
     const now = Date.now();
     const timeOnPrevious = this.#lastPageUrl ? now - this.#lastPageEnter : undefined;
     this.#batcher.push({
@@ -193,7 +188,7 @@ export class SessionTracker {
       user_id: this.#userId,
       session_id: this.#sessionId,
       variant_id: this.#variantId,
-      timestamp: new Date().toISOString(),
+      timestamp: nowIso(),
       metadata: {
         ...this.#baseMeta(pageUrl),
         ...this.#attributionMeta(navigationType),
@@ -206,6 +201,14 @@ export class SessionTracker {
     this.#lastPageEnter = now;
   }
 
+  #scheduleSpaPageView(): void {
+    if (this.#spaPageViewTimer !== null) clearTimeout(this.#spaPageViewTimer);
+    this.#spaPageViewTimer = setTimeout(() => {
+      this.#spaPageViewTimer = null;
+      this.#emitPageView('spa');
+    }, SPA_PAGE_VIEW_DEBOUNCE_MS);
+  }
+
   #patchHistory(): void {
     const self = this;
     this.#originalPushState = history.pushState.bind(history);
@@ -213,11 +216,11 @@ export class SessionTracker {
 
     history.pushState = function (...args: Parameters<History['pushState']>) {
       self.#originalPushState!(...args);
-      self.#emitPageView('spa');
+      self.#scheduleSpaPageView();
     };
     history.replaceState = function (...args: Parameters<History['replaceState']>) {
       self.#originalReplaceState!(...args);
-      self.#emitPageView('spa');
+      self.#scheduleSpaPageView();
     };
 
     const onPop = () => self.#emitPageView('back');
@@ -234,9 +237,9 @@ export class SessionTracker {
         user_id: this.#userId,
         session_id: this.#sessionId,
         variant_id: this.#variantId,
-        timestamp: new Date().toISOString(),
+        timestamp: nowIso(),
         metadata: {
-          ...this.#baseMeta(pathOnly(window.location.href)),
+          ...this.#baseMeta(getCurrentPagePath()),
           hidden: document.hidden,
         },
       });
@@ -261,17 +264,17 @@ export class SessionTracker {
             user_id: this.#userId,
             session_id: this.#sessionId,
             variant_id: this.#variantId,
-            timestamp: new Date().toISOString(),
+            timestamp: nowIso(),
             metadata: {
-              ...this.#baseMeta(pathOnly(window.location.href)),
+              ...this.#baseMeta(getCurrentPagePath()),
               navigation_kind: 'external',
             },
           });
         }
       } catch { /* ignore */ }
     };
-    document.addEventListener('click', onClick, true);
-    this.#cleanups.push(() => document.removeEventListener('click', onClick, true));
+    const unregister = registerClickHandler(onClick);
+    this.#cleanups.push(unregister);
   }
 
   #bindErrors(): void {
@@ -282,9 +285,9 @@ export class SessionTracker {
         user_id: this.#userId,
         session_id: this.#sessionId,
         variant_id: this.#variantId,
-        timestamp: new Date().toISOString(),
+        timestamp: nowIso(),
         metadata: {
-          ...this.#baseMeta(pathOnly(window.location.href)),
+          ...this.#baseMeta(getCurrentPagePath()),
           message: (ev.message || 'Script error').slice(0, 200),
         },
       });
@@ -297,9 +300,9 @@ export class SessionTracker {
         user_id: this.#userId,
         session_id: this.#sessionId,
         variant_id: this.#variantId,
-        timestamp: new Date().toISOString(),
+        timestamp: nowIso(),
         metadata: {
-          ...this.#baseMeta(pathOnly(window.location.href)),
+          ...this.#baseMeta(getCurrentPagePath()),
           message: msg.slice(0, 200),
         },
       });
@@ -319,9 +322,9 @@ export class SessionTracker {
       user_id: this.#userId,
       session_id: this.#sessionId,
       variant_id: this.#variantId,
-      timestamp: new Date().toISOString(),
+      timestamp: nowIso(),
       metadata: {
-        ...this.#baseMeta(pathOnly(window.location.href)),
+        ...this.#baseMeta(getCurrentPagePath()),
         goal_id: goalId,
         ga4_event_name: ga4EventName,
       },

@@ -40,12 +40,18 @@ export function dedupeBatchMetadata(events: ABEvent[]): ABEvent[] {
   });
 }
 
+const scheduleIdle =
+  typeof requestIdleCallback !== 'undefined'
+    ? (cb: () => void) => requestIdleCallback(cb, { timeout: 2000 })
+    : (cb: () => void) => setTimeout(cb, 0);
+
 export class EventBatcher {
   #q: ABEvent[] = [];
   #t: ReturnType<typeof setInterval> | null = null;
   #h: string;
   #k: string;
   #debug: boolean;
+  #idleFlushScheduled = false;
 
   constructor(host: string, key: string, debug = false) {
     this.#h = host;
@@ -64,7 +70,16 @@ export class EventBatcher {
   push(e: ABEvent): void {
     if (!this.#t) this.start();
     this.#q.push(e);
-    if (this.#q.length >= 20) this.#flush();
+    if (this.#q.length >= 20) this.#scheduleIdleFlush();
+  }
+
+  #scheduleIdleFlush(): void {
+    if (this.#idleFlushScheduled) return;
+    this.#idleFlushScheduled = true;
+    scheduleIdle(() => {
+      this.#idleFlushScheduled = false;
+      this.#flush();
+    });
   }
 
   async #flush(): Promise<void> {
@@ -74,7 +89,12 @@ export class EventBatcher {
     const url = this.#h + '/api/ab/events/batch';
     const body = JSON.stringify({ events: evts });
     try {
-      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this.#k }, body });
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this.#k },
+        body,
+        keepalive: true,
+      });
       if (!r.ok) { if (this.#debug) console.log('[GR Debug] Batch flush failed:', r.status); throw 0; }
       if (this.#debug) console.log('[GR Debug] Batch flush success:', evts.length, 'events sent');
     } catch { setTimeout(() => this.#retry(url, body), 5000); }
@@ -82,7 +102,12 @@ export class EventBatcher {
 
   async #retry(url: string, body: string): Promise<void> {
     try {
-      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this.#k }, body });
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this.#k },
+        body,
+        keepalive: true,
+      });
       if (!r.ok) throw 0;
     } catch {}
   }

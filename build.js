@@ -85,6 +85,7 @@ const lazyAudiencePlugin      = createLazyPlugin("audience", "__grAudience", {
   failSoftStub: "{ setupAudience: function() { return { cleanup: function(){}, urlScan: function(){} }; } }",
 });
 const lazyFormTrackerPlugin   = createLazyPlugin("form-tracker",  "__grFormTracker");
+const lazySessionTrackerPlugin = createLazyPlugin("session-tracker", "__grSessionTracker");
 
 const corePlugins = [
   lazyHeatmapPlugin,
@@ -94,6 +95,7 @@ const corePlugins = [
   lazyGoalsPlugin,
   lazyAudiencePlugin,
   lazyFormTrackerPlugin,
+  lazySessionTrackerPlugin,
 ];
 
 const sharedOptions = {
@@ -199,6 +201,17 @@ async function build() {
   });
 
   await esbuild.build({
+    entryPoints: ["src/session-tracker.ts"],
+    bundle: true,
+    platform: "browser",
+    target: "es2022",
+    format: "iife",
+    globalName: "__grSessionTracker",
+    ...minifyOptions,
+    outfile: "dist/session-tracker.min.js",
+  });
+
+  await esbuild.build({
     entryPoints: ["src/survey.ts"],
     bundle: true,
     platform: "browser",
@@ -257,6 +270,9 @@ async function build() {
   const ftFile = fs.statSync("dist/form-tracker.min.js");
   const ftSizeKB = (ftFile.size / 1024).toFixed(2);
 
+  const stFile = fs.statSync("dist/session-tracker.min.js");
+  const stSizeKB = (stFile.size / 1024).toFixed(2);
+
   console.log("\nBuild complete!");
   console.log("  dist/growth.min.js       " + sizeKB + " KB raw / " + gzKB + " KB gzip — core bundle");
   console.log("  dist/growth-loader.min.js " + loaderSizeKB + " KB");
@@ -265,6 +281,7 @@ async function build() {
   console.log("  dist/gr-attrs.min.js     " + audSizeKB + " KB — lazy chunk (audience attrs)");
   console.log("  dist/form-tracker.min.js " + ftSizeKB + " KB — lazy chunk");
   console.log("  dist/heatmap.min.js      " + heatmapSizeKB + " KB — lazy chunk");
+  console.log("  dist/session-tracker.min.js " + stSizeKB + " KB — lazy chunk");
   console.log("  dist/survey.min.js       " + surveySizeKB + " KB — lazy chunk");
   console.log("  dist/survey-widget.min.js " + surveyWidgetSizeKB + " KB — lazy chunk");
   console.log("  dist/growth.esm.js");

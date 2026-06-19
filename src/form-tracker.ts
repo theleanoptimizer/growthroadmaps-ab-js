@@ -93,13 +93,7 @@ function isFormField(el: Element): el is HTMLInputElement | HTMLSelectElement | 
   return false;
 }
 
-function deviceType(): string {
-  const ua = navigator.userAgent;
-  if (/Tablet|iPad/i.test(ua)) return 'tablet';
-  if (/Mobi|Android/i.test(ua)) return 'mobile';
-  return 'desktop';
-}
-
+import { getDeviceType } from './session-context';
 function urlMatch(url: string, type: string, val: string, compiledRegex?: RegExp): boolean {
   switch (type) {
     case 'exact': case 'equals': return url === val;
@@ -425,7 +419,7 @@ export class FormTracker {
         form_selector: state.selector,
         form_action: state.action,
         submitted: state.submitted,
-        device_type: deviceType(),
+        device_type: getDeviceType(),
         fields,
       },
     };

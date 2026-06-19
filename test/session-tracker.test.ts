@@ -70,15 +70,19 @@ describe("SessionTracker", () => {
     expect(evt.metadata.referrer).toContain("google.com");
   });
 
-  it("persists first-touch in sessionStorage and does not re-send on SPA navigation", () => {
+  it("persists first-touch in sessionStorage and does not re-send on SPA navigation", async () => {
+    vi.useFakeTimers();
     const tracker = new SessionTracker(batcher as never, "user-1", "sess-1", () => true, () => true, "proj-1");
     tracker.start();
     push.mockClear();
     history.pushState({}, "", "/checkout");
+    await vi.advanceTimersByTimeAsync(100);
     const calls = push.mock.calls.filter((c) => c[0].type === "session_page_view");
     expect(calls.length).toBeGreaterThan(0);
     expect(calls[0][0].metadata.utm_source).toBeUndefined();
     expect(loadFirstTouchAttribution("proj-1")?.utm_source).toBe("google");
+    tracker.destroy();
+    vi.useRealTimers();
   });
 
   it("getOrCaptureFirstTouch uses storage key scoped by project", () => {

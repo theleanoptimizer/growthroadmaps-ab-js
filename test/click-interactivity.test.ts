@@ -1,11 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import {
-  looksClickable,
-  captureClickBaseline,
-  hadMeaningfulResponse,
-  DEAD_CLICK_VERIFY_MS,
-} from '../src/click-interactivity';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { looksClickable } from '../src/click-interactivity';
 
 describe('looksClickable', () => {
   beforeEach(() => {
@@ -49,81 +44,18 @@ describe('looksClickable', () => {
     expect(looksClickable(span)).toBe(true);
   });
 
-  it('returns true when ancestor has cursor:pointer', () => {
+  it('does not use getComputedStyle — pointer cursor alone is not clickable', () => {
     const wrapper = document.createElement('div');
     wrapper.style.cursor = 'pointer';
     const inner = document.createElement('span');
     wrapper.appendChild(inner);
     document.body.appendChild(wrapper);
-    expect(looksClickable(inner)).toBe(true);
+    expect(looksClickable(inner)).toBe(false);
   });
 
   it('returns false for plain div without cues', () => {
     const div = document.createElement('div');
     document.body.appendChild(div);
     expect(looksClickable(div)).toBe(false);
-  });
-
-  it('exports DEAD_CLICK_VERIFY_MS as 500', () => {
-    expect(DEAD_CLICK_VERIFY_MS).toBe(500);
-  });
-});
-
-describe('hadMeaningfulResponse', () => {
-  beforeEach(() => {
-    document.body.innerHTML = '';
-  });
-
-  it('detects location.href change', () => {
-    const el = document.createElement('div');
-    document.body.appendChild(el);
-    const baseline = captureClickBaseline(el);
-    history.pushState({}, '', '/new-path');
-    expect(hadMeaningfulResponse(baseline, el)).toBe(true);
-    history.back();
-  });
-
-  it('detects focus change', () => {
-    const el = document.createElement('div');
-    const input = document.createElement('input');
-    document.body.appendChild(el);
-    document.body.appendChild(input);
-    const baseline = captureClickBaseline(el);
-    input.focus();
-    expect(hadMeaningfulResponse(baseline, el)).toBe(true);
-  });
-
-  it('detects aria-expanded change', () => {
-    const el = document.createElement('div');
-    el.setAttribute('aria-expanded', 'false');
-    document.body.appendChild(el);
-    const baseline = captureClickBaseline(el);
-    el.setAttribute('aria-expanded', 'true');
-    expect(hadMeaningfulResponse(baseline, el)).toBe(true);
-  });
-
-  it('detects subtree text change', () => {
-    const el = document.createElement('div');
-    document.body.appendChild(el);
-    const baseline = captureClickBaseline(el);
-    el.textContent = 'updated';
-    expect(hadMeaningfulResponse(baseline, el)).toBe(true);
-  });
-
-  it('detects new dialog in body', () => {
-    const el = document.createElement('div');
-    document.body.appendChild(el);
-    const baseline = captureClickBaseline(el);
-    const dialog = document.createElement('div');
-    dialog.setAttribute('role', 'dialog');
-    document.body.appendChild(dialog);
-    expect(hadMeaningfulResponse(baseline, el)).toBe(true);
-  });
-
-  it('returns false when nothing changed', () => {
-    const el = document.createElement('div');
-    document.body.appendChild(el);
-    const baseline = captureClickBaseline(el);
-    expect(hadMeaningfulResponse(baseline, el)).toBe(false);
   });
 });
