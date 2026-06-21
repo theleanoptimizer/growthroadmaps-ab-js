@@ -277,34 +277,69 @@ export class SessionTracker {
     this.#cleanups.push(unregister);
   }
 
+  #buildErrorMetadata(
+    baseMeta: Record<string, unknown>,
+    opts: {
+      message: string;
+      source: 'error' | 'unhandledrejection';
+      errorName?: string;
+      filename?: string;
+      lineno?: number;
+      colno?: number;
+      stack?: string;
+    },
+  ): Record<string, unknown> {
+    const meta: Record<string, unknown> = {
+      ...baseMeta,
+      message: opts.message.slice(0, 200),
+      source: opts.source,
+    };
+    if (opts.errorName) meta.error_name = opts.errorName.slice(0, 80);
+    if (opts.filename) meta.filename = opts.filename.slice(0, 300);
+    if (opts.lineno != null && Number.isFinite(opts.lineno)) meta.lineno = opts.lineno;
+    if (opts.colno != null && Number.isFinite(opts.colno)) meta.colno = opts.colno;
+    if (opts.stack) meta.stack = opts.stack.slice(0, 500);
+    return meta;
+  }
+
   #bindErrors(): void {
     const onError = (ev: ErrorEvent) => {
       if (!this.#canTrack()) return;
+      const errObj = ev.error instanceof Error ? ev.error : null;
       this.#batcher.push({
         type: 'session_error',
         user_id: this.#userId,
         session_id: this.#sessionId,
         variant_id: this.#variantId,
         timestamp: nowIso(),
-        metadata: {
-          ...this.#baseMeta(getCurrentPagePath()),
-          message: (ev.message || 'Script error').slice(0, 200),
-        },
+        metadata: this.#buildErrorMetadata(this.#baseMeta(getCurrentPagePath()), {
+          message: ev.message || errObj?.message || 'Script error',
+          source: 'error',
+          errorName: errObj?.name,
+          filename: ev.filename || undefined,
+          lineno: ev.lineno || undefined,
+          colno: ev.colno || undefined,
+          stack: errObj?.stack,
+        }),
       });
     };
     const onRejection = (ev: PromiseRejectionEvent) => {
       if (!this.#canTrack()) return;
-      const msg = ev.reason instanceof Error ? ev.reason.message : String(ev.reason);
+      const reason = ev.reason;
+      const errObj = reason instanceof Error ? reason : null;
+      const msg = errObj?.message ?? String(reason);
       this.#batcher.push({
         type: 'session_error',
         user_id: this.#userId,
         session_id: this.#sessionId,
         variant_id: this.#variantId,
         timestamp: nowIso(),
-        metadata: {
-          ...this.#baseMeta(getCurrentPagePath()),
-          message: msg.slice(0, 200),
-        },
+        metadata: this.#buildErrorMetadata(this.#baseMeta(getCurrentPagePath()), {
+          message: msg,
+          source: 'unhandledrejection',
+          errorName: errObj?.name,
+          stack: errObj?.stack,
+        }),
       });
     };
     window.addEventListener('error', onError);
