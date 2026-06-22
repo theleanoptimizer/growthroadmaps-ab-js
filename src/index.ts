@@ -914,7 +914,11 @@ export class GrowthRoadmaps {
         const hasAllForms = this.#p?.form_analytics_all_forms_enabled === true;
         const ruleSets = this.#hc.map(c => c.url_rules || []);
         const rates = this.#hc.map(c => typeof c.sampling_rate === 'number' ? c.sampling_rate : 1.0);
-        const effectiveSamplingRate = rates.length > 0 ? Math.min(...rates) : 1.0;
+        const { resolveEffectiveTrackingSamplingRate } = await import('./tracking-sampling');
+        const effectiveSamplingRate = resolveEffectiveTrackingSamplingRate(
+          this.#p?.tracking_sampling_rate,
+          rates,
+        );
         const wantsSessionAnalysis = this.#p?.session_analysis_enabled !== false;
         const wantsHeatmap = ruleSets.length > 0 || hasAllPages;
         let trackingSampled = true;

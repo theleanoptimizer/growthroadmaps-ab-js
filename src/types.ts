@@ -159,6 +159,7 @@ export interface ProjectInfo {
   heatmaps_enabled?: boolean;
   surveys_enabled?: boolean;
   session_analysis_enabled?: boolean;
+  tracking_sampling_rate?: number;
 }
 
 export interface AudienceAttributeConfig {

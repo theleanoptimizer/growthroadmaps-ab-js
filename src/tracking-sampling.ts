@@ -4,8 +4,24 @@
  * session events; excluded sessions emit neither.
  */
 
+const DEFAULT_TRACKING_SAMPLING_RATE = 0.2;
+
 export function trackingSamplingStorageKey(projectKey: string): string {
   return `_gr_track_sample_${projectKey || 'default'}`;
+}
+
+/** Project-level rate wins; otherwise min of heatmap config rates; else default 20%. */
+export function resolveEffectiveTrackingSamplingRate(
+  projectRate: number | undefined,
+  heatmapConfigRates: number[],
+): number {
+  if (typeof projectRate === 'number' && projectRate > 0 && projectRate <= 1) {
+    return projectRate;
+  }
+  if (heatmapConfigRates.length > 0) {
+    return Math.min(...heatmapConfigRates);
+  }
+  return DEFAULT_TRACKING_SAMPLING_RATE;
 }
 
 export function isTrackingSessionSampled(projectKey: string, rate: number): boolean {

@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   isTrackingSessionSampled,
+  resolveEffectiveTrackingSamplingRate,
   trackingSamplingStorageKey,
 } from "../src/tracking-sampling";
 
@@ -45,5 +46,19 @@ describe("isTrackingSessionSampled", () => {
     vi.mocked(Math.random).mockReturnValue(0.9);
     expect(isTrackingSessionSampled("proj-3", 0.5)).toBe(false);
     expect(sessionStorage.getItem(trackingSamplingStorageKey("proj-3"))).toBe("0");
+  });
+});
+
+describe("resolveEffectiveTrackingSamplingRate", () => {
+  it("prefers project-level rate when set", () => {
+    expect(resolveEffectiveTrackingSamplingRate(0.5, [0.2, 0.1])).toBe(0.5);
+  });
+
+  it("falls back to min heatmap config rate when project rate is missing", () => {
+    expect(resolveEffectiveTrackingSamplingRate(undefined, [0.2, 0.5])).toBe(0.2);
+  });
+
+  it("defaults to 20% when no project or config rates exist", () => {
+    expect(resolveEffectiveTrackingSamplingRate(undefined, [])).toBe(0.2);
   });
 });
