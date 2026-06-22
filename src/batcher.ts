@@ -45,6 +45,9 @@ const scheduleIdle =
     ? (cb: () => void) => requestIdleCallback(cb, { timeout: 2000 })
     : (cb: () => void) => setTimeout(cb, 0);
 
+/** Server rejects batches over 50 events — flush in chunks to match. */
+export const MAX_EVENTS_PER_REQUEST = 50;
+
 export class EventBatcher {
   #q: ABEvent[] = [];
   #t: ReturnType<typeof setInterval> | null = null;
@@ -65,7 +68,12 @@ export class EventBatcher {
     }
   }
 
-  start(): void { if (!this.#t) this.#t = setInterval(() => { if (this.#q.length) this.#flush(); }, 2000); }
+  start(): void { if (!this.#t) this.#t = setInterval(() => { if (this.#q.length) void this.flush(); }, 2000); }
+
+  /** Drain the queue to the server in ≤50-event POSTs. */
+  async flush(): Promise<void> {
+    await this.#flush();
+  }
 
   push(e: ABEvent): void {
     if (!this.#t) this.start();
@@ -78,26 +86,31 @@ export class EventBatcher {
     this.#idleFlushScheduled = true;
     scheduleIdle(() => {
       this.#idleFlushScheduled = false;
-      this.#flush();
+      void this.flush();
     });
   }
 
   async #flush(): Promise<void> {
-    if (!this.#q.length) return;
-    const evts = dedupeBatchMetadata(this.#q.splice(0));
-    if (this.#debug) console.log('[GR Debug] Flushing', evts.length, 'events', evts.map(e => e.type));
-    const url = this.#h + '/api/ab/events/batch';
-    const body = JSON.stringify({ events: evts });
-    try {
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this.#k },
-        body,
-        keepalive: true,
-      });
-      if (!r.ok) { if (this.#debug) console.log('[GR Debug] Batch flush failed:', r.status); throw 0; }
-      if (this.#debug) console.log('[GR Debug] Batch flush success:', evts.length, 'events sent');
-    } catch { setTimeout(() => this.#retry(url, body), 5000); }
+    while (this.#q.length) {
+      const batch = this.#q.splice(0, MAX_EVENTS_PER_REQUEST);
+      const evts = dedupeBatchMetadata(batch);
+      if (this.#debug) console.log('[GR Debug] Flushing', evts.length, 'events', evts.map(e => e.type));
+      const url = this.#h + '/api/ab/events/batch';
+      const body = JSON.stringify({ events: evts });
+      try {
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this.#k },
+          body,
+          keepalive: true,
+        });
+        if (!r.ok) { if (this.#debug) console.log('[GR Debug] Batch flush failed:', r.status); throw 0; }
+        if (this.#debug) console.log('[GR Debug] Batch flush success:', evts.length, 'events sent');
+      } catch {
+        setTimeout(() => this.#retry(url, body), 5000);
+        return;
+      }
+    }
   }
 
   async #retry(url: string, body: string): Promise<void> {
@@ -113,9 +126,19 @@ export class EventBatcher {
   }
 
   #beacon(): void {
-    if (!this.#q.length) return;
-    const evts = dedupeBatchMetadata(this.#q.splice(0));
-    try { navigator.sendBeacon(this.#h + '/api/ab/events/batch', new Blob([JSON.stringify({ events: evts, clientKey: this.#k })], { type: 'application/json' })); } catch {}
+    while (this.#q.length) {
+      const batch = this.#q.splice(0, MAX_EVENTS_PER_REQUEST);
+      const evts = dedupeBatchMetadata(batch);
+      try {
+        navigator.sendBeacon(
+          this.#h + '/api/ab/events/batch',
+          new Blob([JSON.stringify({ events: evts, clientKey: this.#k })], { type: 'application/json' }),
+        );
+      } catch {
+        this.#q.unshift(...batch);
+        return;
+      }
+    }
   }
 
   flushBeacon(): void { this.#beacon(); }
