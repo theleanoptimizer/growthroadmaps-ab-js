@@ -14,6 +14,8 @@ interface CompiledUrlRule {
 const SCROLL_THROTTLE = 200;
 const ATTENTION_BUCKETS = 20;
 const ATTENTION_FALLBACK_MS = 1000;
+const CLICK_COALESCE_MS = 200;
+const CLICK_COALESCE_GRID = 25;
 
 function getSelector(el: Element): string {
   if (el.id) return '#' + el.id;
@@ -58,6 +60,7 @@ export class HeatmapTracker {
   #attentionSent = false;
   #lastAttentionTick = Date.now();
   #unregisterClick?: () => void;
+  #clickCoalesceMap = new Map<string, number>();
 
   constructor(
     batcher: EventBatcher,
@@ -134,6 +137,15 @@ export class HeatmapTracker {
     const now = Date.now();
     const { isDeadClick, isRageClick } = this.#proximity.record(e.clientX, e.clientY, now);
     const interactive = looksClickable(target);
+
+    if (!isRageClick && !isDeadClick) {
+      const gx = Math.floor(x * CLICK_COALESCE_GRID);
+      const gy = Math.floor(y * CLICK_COALESCE_GRID);
+      const key = `${gx},${gy}`;
+      const last = this.#clickCoalesceMap.get(key);
+      if (last != null && now - last < CLICK_COALESCE_MS) return;
+      this.#clickCoalesceMap.set(key, now);
+    }
 
     const evt: HeatmapClickEvent = {
       type: 'heatmap_click',

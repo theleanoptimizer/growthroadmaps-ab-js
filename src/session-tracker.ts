@@ -91,6 +91,7 @@ export function sanitizeVisibleText(el: Element | null): string | undefined {
 }
 
 const SPA_PAGE_VIEW_DEBOUNCE_MS = 100;
+const SCROLL_MILESTONES = [25, 50, 75, 100] as const;
 
 export class SessionTracker {
   #batcher: EventBatcher;
@@ -107,6 +108,9 @@ export class SessionTracker {
   #originalReplaceState?: History['replaceState'];
   #initialAttributionSent = false;
   #spaPageViewTimer: ReturnType<typeof setTimeout> | null = null;
+  #hiddenAt: number | null = null;
+  #scrollMilestonesSent = new Set<number>();
+  #performanceSent = false;
 
   constructor(
     batcher: EventBatcher,
@@ -136,6 +140,8 @@ export class SessionTracker {
     this.#bindVisibility();
     this.#bindErrors();
     this.#bindNavigation();
+    this.#bindScrollMilestones();
+    this.#bindPerformance();
   }
 
   destroy(): void {
@@ -199,6 +205,8 @@ export class SessionTracker {
     });
     this.#lastPageUrl = pageUrl;
     this.#lastPageEnter = now;
+    this.#scrollMilestonesSent.clear();
+    this.#performanceSent = false;
   }
 
   #scheduleSpaPageView(): void {
@@ -231,18 +239,39 @@ export class SessionTracker {
   #bindVisibility(): void {
     const onVis = () => {
       if (!this.#canTrack()) return;
-      if (!document.hidden) return;
-      this.#batcher.push({
-        type: 'session_visibility',
-        user_id: this.#userId,
-        session_id: this.#sessionId,
-        variant_id: this.#variantId,
-        timestamp: nowIso(),
-        metadata: {
-          ...this.#baseMeta(getCurrentPagePath()),
-          hidden: document.hidden,
-        },
-      });
+      const pageUrl = getCurrentPagePath();
+      if (document.hidden) {
+        this.#hiddenAt = Date.now();
+        this.#batcher.push({
+          type: 'session_visibility',
+          user_id: this.#userId,
+          session_id: this.#sessionId,
+          variant_id: this.#variantId,
+          timestamp: nowIso(),
+          metadata: {
+            ...this.#baseMeta(pageUrl),
+            hidden: true,
+          },
+        });
+        return;
+      }
+      if (this.#hiddenAt != null) {
+        const awayDuration = Date.now() - this.#hiddenAt;
+        this.#hiddenAt = null;
+        if (awayDuration > 0) {
+          this.#batcher.push({
+            type: 'session_visibility_return',
+            user_id: this.#userId,
+            session_id: this.#sessionId,
+            variant_id: this.#variantId,
+            timestamp: nowIso(),
+            metadata: {
+              ...this.#baseMeta(pageUrl),
+              away_duration_ms: awayDuration,
+            },
+          });
+        }
+      }
     };
     document.addEventListener('visibilitychange', onVis);
     this.#cleanups.push(() => document.removeEventListener('visibilitychange', onVis));
@@ -258,6 +287,7 @@ export class SessionTracker {
       if (!href || href.startsWith('#')) return;
       try {
         const dest = new URL(href, window.location.href);
+        const pageUrl = getCurrentPagePath();
         if (dest.origin !== window.location.origin) {
           this.#batcher.push({
             type: 'session_navigation',
@@ -266,8 +296,20 @@ export class SessionTracker {
             variant_id: this.#variantId,
             timestamp: nowIso(),
             metadata: {
-              ...this.#baseMeta(getCurrentPagePath()),
+              ...this.#baseMeta(pageUrl),
               navigation_kind: 'external',
+            },
+          });
+        } else {
+          this.#batcher.push({
+            type: 'session_internal_nav',
+            user_id: this.#userId,
+            session_id: this.#sessionId,
+            variant_id: this.#variantId,
+            timestamp: nowIso(),
+            metadata: {
+              ...this.#baseMeta(pageUrl),
+              destination_path: dest.pathname + dest.search,
             },
           });
         }
@@ -275,6 +317,116 @@ export class SessionTracker {
     };
     const unregister = registerClickHandler(onClick);
     this.#cleanups.push(unregister);
+  }
+
+  #bindScrollMilestones(): void {
+    const checkScroll = () => {
+      if (!this.#canTrack()) return;
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const viewportHeight = window.innerHeight;
+      const pageHeight = Math.max(
+        document.body.scrollHeight,
+        document.documentElement.scrollHeight,
+        viewportHeight,
+      );
+      if (pageHeight <= viewportHeight) return;
+      const percent = Math.min(100, Math.round(((scrollTop + viewportHeight) / pageHeight) * 100));
+      const pageUrl = getCurrentPagePath();
+      for (const milestone of SCROLL_MILESTONES) {
+        if (percent >= milestone && !this.#scrollMilestonesSent.has(milestone)) {
+          this.#scrollMilestonesSent.add(milestone);
+          this.#batcher.push({
+            type: 'session_scroll_milestone',
+            user_id: this.#userId,
+            session_id: this.#sessionId,
+            variant_id: this.#variantId,
+            timestamp: nowIso(),
+            metadata: {
+              ...this.#baseMeta(pageUrl),
+              scroll_percent: milestone,
+            },
+          });
+        }
+      }
+    };
+    window.addEventListener('scroll', checkScroll, { passive: true });
+    this.#cleanups.push(() => window.removeEventListener('scroll', checkScroll));
+    checkScroll();
+  }
+
+  #bindPerformance(): void {
+    if (typeof PerformanceObserver === 'undefined') return;
+    const vitals: { lcp_ms?: number; cls?: number; inp_ms?: number; ttfb_ms?: number } = {};
+    try {
+      const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+      if (nav?.responseStart) vitals.ttfb_ms = Math.round(nav.responseStart);
+    } catch { /* ignore */ }
+
+    const maybeEmit = (force = false) => {
+      if (!this.#canTrack() || this.#performanceSent) return;
+      const hasPaintMetric =
+        vitals.lcp_ms != null || vitals.cls != null || vitals.inp_ms != null;
+      if (!force && !hasPaintMetric) return;
+      if (
+        vitals.lcp_ms == null &&
+        vitals.cls == null &&
+        vitals.inp_ms == null &&
+        vitals.ttfb_ms == null
+      ) {
+        return;
+      }
+      this.#performanceSent = true;
+      this.#batcher.push({
+        type: 'session_performance',
+        user_id: this.#userId,
+        session_id: this.#sessionId,
+        variant_id: this.#variantId,
+        timestamp: nowIso(),
+        metadata: {
+          ...this.#baseMeta(getCurrentPagePath()),
+          ...vitals,
+        },
+      });
+    };
+
+    try {
+      const lcpObs = new PerformanceObserver((list) => {
+        const entries = list.getEntries();
+        const last = entries[entries.length - 1];
+        if (last) vitals.lcp_ms = Math.round(last.startTime);
+        maybeEmit();
+      });
+      lcpObs.observe({ type: 'largest-contentful-paint', buffered: true });
+      this.#cleanups.push(() => lcpObs.disconnect());
+    } catch { /* unsupported */ }
+
+    try {
+      let cls = 0;
+      const clsObs = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if (!(entry as PerformanceEntry & { hadRecentInput?: boolean }).hadRecentInput) {
+            cls += (entry as PerformanceEntry & { value?: number }).value ?? 0;
+          }
+        }
+        vitals.cls = Math.round(cls * 1000) / 1000;
+        maybeEmit();
+      });
+      clsObs.observe({ type: 'layout-shift', buffered: true });
+      this.#cleanups.push(() => clsObs.disconnect());
+    } catch { /* unsupported */ }
+
+    try {
+      const inpObs = new PerformanceObserver((list) => {
+        const entries = list.getEntries();
+        const last = entries[entries.length - 1] as PerformanceEntry & { duration?: number };
+        if (last?.duration != null) vitals.inp_ms = Math.round(last.duration);
+        maybeEmit();
+      });
+      inpObs.observe({ type: 'event', buffered: true, durationThreshold: 40 } as PerformanceObserverInit);
+      this.#cleanups.push(() => inpObs.disconnect());
+    } catch { /* unsupported */ }
+
+    setTimeout(() => maybeEmit(true), 8000);
   }
 
   #buildErrorMetadata(

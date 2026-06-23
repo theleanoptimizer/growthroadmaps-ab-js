@@ -80,7 +80,16 @@ export interface ConversionEvent {
 export type ABEvent = ExposureEvent | ConversionEvent | HeatmapClickEvent | HeatmapScrollEvent | HeatmapFormEvent | HeatmapAttentionEvent | SessionEvent;
 
 export interface SessionEvent {
-  type: 'session_page_view' | 'session_visibility' | 'session_navigation' | 'session_error' | 'session_goal_fired';
+  type:
+    | 'session_page_view'
+    | 'session_visibility'
+    | 'session_visibility_return'
+    | 'session_navigation'
+    | 'session_internal_nav'
+    | 'session_error'
+    | 'session_goal_fired'
+    | 'session_performance'
+    | 'session_scroll_milestone';
   experiment_id?: string;
   variant_id?: string;
   user_id: string;
