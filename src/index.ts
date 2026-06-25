@@ -1341,5 +1341,34 @@ export class GrowthRoadmaps {
 if (W) {
   W.GrowthRoadmaps = GrowthRoadmaps;
   W.getAntiFlickerSnippet = getAntiFlickerSnippet;
-  try { W.dispatchEvent(new CustomEvent('gr:ready')); } catch {}
+
+  const wireConsentHelpers = () => {
+    W!.grGrantConsent = function () {
+      W!.gr && W!.gr.grantConsent();
+    };
+    W!.grRevokeConsent = function () {
+      W!.gr && W!.gr.revokeConsent();
+    };
+  };
+
+  try {
+    W.dispatchEvent(new CustomEvent('gr:ready'));
+  } catch {}
+
+  const loaderCfg = W.__gr_loader_cfg;
+  if (loaderCfg?.autoInit && loaderCfg.pk && loaderCfg.host) {
+    const gr = new GrowthRoadmaps({
+      projectKey: loaderCfg.pk,
+      apiHost: loaderCfg.host,
+      heatmaps: true,
+      surveys: true,
+      antiFlicker: true,
+      cookieConsent: loaderCfg.cookieConsent,
+    });
+    W.gr = gr;
+    if (loaderCfg.cookieConsent === 'required') {
+      wireConsentHelpers();
+    }
+    void gr.init();
+  }
 }

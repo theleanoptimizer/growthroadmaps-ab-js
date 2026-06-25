@@ -99,7 +99,7 @@ const corePlugins = [
 ];
 
 const sharedOptions = {
-  entryPoints: ["src/index.ts"],
+  entryPoints: ["src/entry.ts"],
   bundle: true,
   platform: "browser",
   target: "es2022",

@@ -65,14 +65,12 @@ async function initSdk(page: Page, projectKey = 'pk_e2e') {
   await page.evaluate(
     ({ apiHost, pk }: { apiHost: string; pk: string }) => {
       const win = window as unknown as Record<string, unknown>;
-      const SDK = win['GrowthRoadmapsSDK'] as {
-        GrowthRoadmaps: new (c: object) => {
-          init: () => Promise<void>;
-          getVariant: (n: string, d: string) => string;
-          flushBeacon: () => void;
-        };
+      const GrowthRoadmaps = win['GrowthRoadmaps'] as new (c: object) => {
+        init: () => Promise<void>;
+        getVariant: (n: string, d: string) => string;
+        flushBeacon: () => void;
       };
-      const sdk = new SDK.GrowthRoadmaps({ projectKey: pk, apiHost });
+      const sdk = new GrowthRoadmaps({ projectKey: pk, apiHost });
       win['__grSdk'] = sdk;
       sdk.init().then(() => { win['__grReady'] = true; });
     },
@@ -263,5 +261,44 @@ test.describe('Lazy chunk loading — end-to-end', () => {
     const src = await resp.text();
     expect(src.length, 'panels.min.js should be non-empty').toBeGreaterThan(100);
     expect(src, 'panels.min.js should define the __grPanels global').toContain('__grPanels');
+  });
+
+  test('experiment bootstrap fast path skips anti-flicker without cached experiments', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.__gr_loader_cfg = {
+        pk: 'pk_fast',
+        host: window.location.origin,
+      };
+      localStorage.clear();
+    });
+    await page.goto(`${DIST_BASE}/`);
+    const opacity = await page.evaluate(() => document.documentElement.style.opacity);
+    expect(opacity).not.toBe('0');
+    expect(await page.evaluate(() => window.__gr_loader_ran)).toBe(true);
+  });
+
+  test('experiment bootstrap replays cached variant CSS from localStorage', async ({ page }) => {
+    await page.addInitScript(() => {
+      const pk = 'pk_slow';
+      window.__gr_loader_cfg = { pk, host: window.location.origin };
+      localStorage.setItem(
+        'ab_cfg_' + pk,
+        JSON.stringify({
+          timestamp: Date.now(),
+          experiments: [{ id: 'exp1', status: 'running', url_rules: [] }],
+        }),
+      );
+      localStorage.setItem(
+        'ab_va_' + pk,
+        JSON.stringify({
+          exp1: { variantId: 'v1', css: 'body { outline: 1px solid red; }', external_css: [] },
+        }),
+      );
+    });
+    await page.goto(`${DIST_BASE}/`);
+    expect(await page.evaluate(() => window.__gr_loader_ran)).toBe(true);
+    expect(
+      await page.evaluate(() => !!document.querySelector('style[data-ab-css="v1"]')),
+    ).toBe(true);
   });
 });

@@ -331,7 +331,15 @@ declare global {
   interface Window {
     __ab_reveal?: () => void;
     __gr_loader_ran?: boolean;
-    __gr_loader_cfg?: { pk: string; host: string };
+    __gr_loader_cfg?: {
+      pk: string;
+      host: string;
+      autoInit?: boolean;
+      cookieConsent?: 'required';
+    };
+    gr?: InstanceType<typeof import('./index').GrowthRoadmaps>;
+    grGrantConsent?: () => void;
+    grRevokeConsent?: () => void;
     GrowthRoadmaps?: typeof import('./index').GrowthRoadmaps;
     getAntiFlickerSnippet?: typeof import('./anti-flicker').getAntiFlickerSnippet;
     dataLayer?: Record<string, unknown>[];
