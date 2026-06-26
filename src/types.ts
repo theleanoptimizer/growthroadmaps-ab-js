@@ -89,7 +89,9 @@ export interface SessionEvent {
     | 'session_error'
     | 'session_goal_fired'
     | 'session_performance'
-    | 'session_scroll_milestone';
+    | 'session_scroll_milestone'
+    | 'session_file_download'
+    | 'session_not_found';
   experiment_id?: string;
   variant_id?: string;
   user_id: string;

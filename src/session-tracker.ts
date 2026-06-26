@@ -1,4 +1,5 @@
 import { EventBatcher } from './batcher';
+import type { SessionEvent } from './types';
 import { registerClickHandler } from './click-delegate';
 import { getDeviceType, getCurrentPagePath, nowIso, setCurrentPagePath } from './session-context';
 import { getCookie, setCookie, isLikely404Page, DOWNLOAD_EXT_RE } from './visitor-identity';
@@ -174,7 +175,7 @@ export class SessionTracker {
   }
 
   #pushSessionEvent(event: {
-    type: string;
+    type: SessionEvent['type'];
     metadata: Record<string, unknown>;
   }): void {
     this.#batcher.push({
