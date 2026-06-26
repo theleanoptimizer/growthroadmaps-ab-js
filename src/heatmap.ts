@@ -61,6 +61,7 @@ export class HeatmapTracker {
   #lastAttentionTick = Date.now();
   #unregisterClick?: () => void;
   #clickCoalesceMap = new Map<string, number>();
+  #extraMeta?: () => Record<string, unknown>;
 
   constructor(
     batcher: EventBatcher,
@@ -71,6 +72,7 @@ export class HeatmapTracker {
     trackAllPages = false,
     _samplingRate = 1.0,
     sessionSampled = true,
+    extraMeta?: () => Record<string, unknown>,
   ) {
     this.#batcher = batcher;
     this.#userId = userId;
@@ -79,6 +81,7 @@ export class HeatmapTracker {
     this.#currentPageUrl = window.location.href;
     this.#trackAllPages = trackAllPages;
     this.#sessionSampled = sessionSampled;
+    this.#extraMeta = extraMeta;
 
     this.#compiledRuleSets = urlRuleSets.map(ruleSet =>
       ruleSet.map(rule => {
@@ -118,6 +121,8 @@ export class HeatmapTracker {
   #push(e: HeatmapClickEvent | HeatmapScrollEvent): void {
     if (!this.#consent()) return;
     if (!this.#sessionSampled) return;
+    const extra = this.#extraMeta?.() || {};
+    e.metadata = { ...extra, ...(e.metadata || {}) };
     this.#batcher.push(e);
   }
 

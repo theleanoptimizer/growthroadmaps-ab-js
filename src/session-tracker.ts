@@ -1,6 +1,7 @@
 import { EventBatcher } from './batcher';
 import { registerClickHandler } from './click-delegate';
 import { getDeviceType, getCurrentPagePath, nowIso, setCurrentPagePath } from './session-context';
+import { getCookie, setCookie, isLikely404Page, DOWNLOAD_EXT_RE } from './visitor-identity';
 
 type NavigationType = 'initial' | 'spa' | 'back' | 'forward';
 
@@ -39,12 +40,12 @@ function captureFirstTouchFromPage(): FirstTouchAttribution {
 }
 
 export function firstTouchStorageKey(projectKey: string): string {
-  return `_gr_sa_attr_${projectKey || 'default'}`;
+  return `_gr_ft_${projectKey || 'default'}`;
 }
 
 export function loadFirstTouchAttribution(projectKey: string): FirstTouchAttribution | null {
   try {
-    const raw = sessionStorage.getItem(firstTouchStorageKey(projectKey));
+    const raw = getCookie(firstTouchStorageKey(projectKey));
     if (!raw) return null;
     return JSON.parse(raw) as FirstTouchAttribution;
   } catch {
@@ -54,8 +55,8 @@ export function loadFirstTouchAttribution(projectKey: string): FirstTouchAttribu
 
 export function saveFirstTouchAttribution(projectKey: string, attrs: FirstTouchAttribution): void {
   try {
-    sessionStorage.setItem(firstTouchStorageKey(projectKey), JSON.stringify(attrs));
-  } catch { /* ignore quota */ }
+    setCookie(firstTouchStorageKey(projectKey), JSON.stringify(attrs), 63072000);
+  } catch { /* ignore */ }
 }
 
 export function getOrCaptureFirstTouch(projectKey: string): FirstTouchAttribution {
@@ -111,6 +112,7 @@ export class SessionTracker {
   #hiddenAt: number | null = null;
   #scrollMilestonesSent = new Set<number>();
   #performanceSent = false;
+  #extraMeta?: () => Record<string, unknown>;
 
   constructor(
     batcher: EventBatcher,
@@ -119,6 +121,7 @@ export class SessionTracker {
     consent: () => boolean,
     enabled: () => boolean,
     projectKey = '',
+    extraMeta?: () => Record<string, unknown>,
   ) {
     this.#batcher = batcher;
     this.#userId = userId;
@@ -126,6 +129,7 @@ export class SessionTracker {
     this.#projectKey = projectKey;
     this.#consent = consent;
     this.#enabled = enabled;
+    this.#extraMeta = extraMeta;
   }
 
   setVariantId(id: string | undefined): void {
@@ -142,6 +146,8 @@ export class SessionTracker {
     this.#bindNavigation();
     this.#bindScrollMilestones();
     this.#bindPerformance();
+    this.#bindCodelessGoals();
+    if (isLikely404Page()) this.#emitNotFound();
   }
 
   destroy(): void {
@@ -161,9 +167,55 @@ export class SessionTracker {
 
   #baseMeta(pageUrl: string): Record<string, unknown> {
     return {
+      ...(this.#extraMeta?.() || {}),
       page_url: pageUrl,
       device_type: getDeviceType(),
     };
+  }
+
+  #pushSessionEvent(event: {
+    type: string;
+    metadata: Record<string, unknown>;
+  }): void {
+    this.#batcher.push({
+      type: event.type,
+      user_id: this.#userId,
+      session_id: this.#sessionId,
+      variant_id: this.#variantId,
+      timestamp: nowIso(),
+      metadata: event.metadata,
+    });
+  }
+
+  #emitNotFound(): void {
+    if (!this.#canTrack()) return;
+    this.#pushSessionEvent({
+      type: 'session_not_found',
+      metadata: {
+        ...this.#baseMeta(getCurrentPagePath()),
+        page_title: document.title?.slice(0, 200),
+      },
+    });
+  }
+
+  #bindCodelessGoals(): void {
+    const onClick = (e: MouseEvent) => {
+      if (!this.#canTrack()) return;
+      const anchor = (e.target as Element | null)?.closest('a');
+      if (!anchor) return;
+      const href = anchor.getAttribute('href') || '';
+      if (anchor.hasAttribute('download') || DOWNLOAD_EXT_RE.test(href)) {
+        this.#pushSessionEvent({
+          type: 'session_file_download',
+          metadata: {
+            ...this.#baseMeta(getCurrentPagePath()),
+            download_href: href.slice(0, 500),
+          },
+        });
+      }
+    };
+    document.addEventListener('click', onClick, true);
+    this.#cleanups.push(() => document.removeEventListener('click', onClick, true));
   }
 
   #attributionMeta(navigationType: NavigationType): Record<string, unknown> {

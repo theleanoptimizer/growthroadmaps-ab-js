@@ -12,6 +12,14 @@ import {
   GrowthCommand,
 } from './types';
 import { assignVariant, fnv1a } from './hasher';
+import {
+  resolveVisitorIdentity,
+  touchVisitorSession,
+  refreshVisitorSessionActivity,
+  getBrowserOsLanguage,
+  setCookie,
+  type VisitorType,
+} from './visitor-identity';
 
 function isExperimentActive(status: string): boolean {
   return status === 'running' || status === 'rolling_out';
@@ -325,15 +333,15 @@ function selectorMatchesNow(selectors: string[]): boolean {
 
 function goalKey(g: Goal): string { return g.goal_type + (g.value ? ':' + g.value : ''); }
 
-function mkEvt(eid: string, vid: string, uid: string, sid?: string, extra?: Record<string, unknown>, attrs?: Record<string, string>): ABEvent {
+function mkEvt(eid: string, vid: string, uid: string, sid?: string, extra?: Record<string, unknown>, attrs?: Record<string, string>, identityMeta?: Record<string, unknown>): ABEvent {
   const extraMeta = extra?.metadata as Record<string, unknown> | undefined;
-  const metadata: Record<string, unknown> = { ...(extraMeta || {}), device_type: devType() };
+  const metadata: Record<string, unknown> = { ...(identityMeta || {}), ...(extraMeta || {}), device_type: devType() };
   if (attrs && Object.keys(attrs).length > 0) metadata.attributes = { ...attrs };
   return { type: 'exposure', experiment_id: eid, variant_id: vid, user_id: uid, session_id: sid, timestamp: new Date().toISOString(), metadata } as ABEvent;
 }
 
-function mkConv(eid: string, vid: string, uid: string, sid: string | undefined, gn: string, gv?: number, md?: Record<string, unknown>, attrs?: Record<string, string>): ABEvent {
-  const metadata: Record<string, unknown> = { ...(md || {}), device_type: devType() };
+function mkConv(eid: string, vid: string, uid: string, sid: string | undefined, gn: string, gv?: number, md?: Record<string, unknown>, attrs?: Record<string, string>, identityMeta?: Record<string, unknown>): ABEvent {
+  const metadata: Record<string, unknown> = { ...(identityMeta || {}), ...(md || {}), device_type: devType() };
   if (attrs && Object.keys(attrs).length > 0) metadata.attributes = { ...attrs };
   return { type: 'conversion', experiment_id: eid, variant_id: vid, user_id: uid, session_id: sid, goal_name: gn, goal_value: gv, metadata, timestamp: new Date().toISOString() } as ABEvent;
 }
@@ -398,6 +406,11 @@ export class GrowthRoadmaps {
   // can be filtered by audience slice. Reserved keys can never appear.
   #attrs: Record<string, string> = {};
   #audCl: (() => void)[] = [];
+  #visitorType: VisitorType = 'new';
+  #visitorSessionId = '';
+  #browser = 'unknown';
+  #os = 'unknown';
+  #language = 'unknown';
 
   constructor(c: GrowthConfig) {
     this.#consentRequired = c.cookieConsent === 'required';
@@ -409,7 +422,20 @@ export class GrowthRoadmaps {
       else if (dp === 'false') { this.#debug = false; try { sessionStorage.removeItem('_ab_debug'); } catch {} }
       else { try { if (sessionStorage.getItem('_ab_debug') === '1') this.#debug = true; } catch {} }
     }
-    if (!c.userId && !c.sessionId && D) c.userId = vid(this.#consentRequired);
+    if (!c.userId && !c.sessionId && D) {
+      const { userId, visitorType } = resolveVisitorIdentity(this.#consentRequired);
+      c.userId = userId;
+      this.#visitorType = visitorType;
+    } else if (c.userId && D && gc('_ab_vid')) {
+      this.#visitorType = 'returning';
+      if (this.#consent) setCookie('returning', '1');
+    }
+    const pk = c.projectKey || '';
+    this.#visitorSessionId = touchVisitorSession(pk, this.#consent);
+    const device = getBrowserOsLanguage();
+    this.#browser = device.browser;
+    this.#os = device.os;
+    this.#language = device.language;
     if (!c.sessionId) {
       try {
         let sid = sessionStorage.getItem('_ab_sid');
@@ -620,6 +646,7 @@ export class GrowthRoadmaps {
       trackAllPages,
       samplingRate,
       sessionSampled,
+      () => this.#identityMeta(),
     );
     // Backfill variant ID: getVariant() / #applyClientExperiments() may have run before
     // this async module finished loading, so this.#ht was null when setVariantId was called.
@@ -647,6 +674,7 @@ export class GrowthRoadmaps {
       () => this.#consent,
       () => this.#p?.session_analysis_enabled !== false && this.#p?.heatmaps_enabled !== false,
       this.#pk(),
+      () => this.#identityMeta(),
     );
     if (this.#a.size > 0) {
       const lastVariant = [...this.#a.values()].pop();
@@ -656,6 +684,16 @@ export class GrowthRoadmaps {
   }
 
   #pk(): string { return this.#c.projectKey || ''; }
+  #identityMeta(): Record<string, unknown> {
+    refreshVisitorSessionActivity(this.#pk(), this.#visitorSessionId, this.#consent);
+    return {
+      visitor_type: this.#visitorType,
+      visitor_session_id: this.#visitorSessionId,
+      browser: this.#browser,
+      os: this.#os,
+      language: this.#language,
+    };
+  }
   #saveFiredGoals(): void { try { sessionStorage.setItem('_ab_fg_' + this.#pk(), JSON.stringify([...this.#fg])); } catch {} }
   #uid(): string | undefined { return this.#c.userId || this.#c.sessionId; }
   #isPanelSession(): boolean { try { return !!sessionStorage.getItem('_ab_panel_key') && sessionStorage.getItem('_ab_panel_pk') === this.#pk(); } catch { return false; } }
@@ -953,6 +991,8 @@ export class GrowthRoadmaps {
   getProject(): ProjectInfo | null { return this.#p; }
 
   #pushEvent(e: ABEvent): void {
+    const meta = (e.metadata || {}) as Record<string, unknown>;
+    e.metadata = { ...this.#identityMeta(), ...meta };
     if (this.#consent) {
       this.#b.push(e);
     } else {
@@ -1018,7 +1058,7 @@ export class GrowthRoadmaps {
     if (!this.#seen.has(e.id)) {
       this.#seen.add(e.id);
       this.#exposedAt.set(e.id, Date.now());
-      this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined, this.#attrs));
+      this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined, this.#attrs, this.#identityMeta()));
       this.#dbg('Exposure event sent:', name, '→', v.name);
       if (this.#sv) this.#sv.onExposure();
     }
@@ -1069,7 +1109,7 @@ export class GrowthRoadmaps {
       const matchedGoal = e.goals?.find(g => g.goal_type === 'custom' && (g.label === goal || g.value === goal));
       if (!matchedGoal) { this.#dbg('track() SKIPPED:', e.name, '— no matching custom goal for', goal); continue; }
       this.#dbg('Conversion sent (track):', e.name, '→', v.name, 'goal:', goal);
-      this.#pushEvent(mkConv(e.id, v.id, u, this.#c.sessionId, goal, o?.value, o?.metadata, this.#attrs));
+      this.#pushEvent(mkConv(e.id, v.id, u, this.#c.sessionId, goal, o?.value, o?.metadata, this.#attrs, this.#identityMeta()));
       if (this.#sv) this.#sv.onConversion(e.id, matchedGoal.id);
       sent++;
     }
@@ -1084,7 +1124,7 @@ export class GrowthRoadmaps {
     const v = e && this.#a.get(e.id);
     if (!e || !v) { this.#dbg('trackFor() SKIPPED:', en, 'goal:', gn, '— no assignment found', e ? '(experiment exists but no variant assigned)' : '(experiment not found)'); return; }
     this.#dbg('Conversion sent (trackFor):', en, '→', v.name, 'goal:', gn);
-    this.#pushEvent(mkConv(e.id, v.id, u, this.#c.sessionId, gn, o?.value, undefined, this.#attrs));
+    this.#pushEvent(mkConv(e.id, v.id, u, this.#c.sessionId, gn, o?.value, undefined, this.#attrs, this.#identityMeta()));
     const matchedGoal = e.goals?.find(g => goalKey(g) === gn);
     if (matchedGoal && this.#sv) this.#sv.onConversion(e.id, matchedGoal.id);
   }
@@ -1141,7 +1181,7 @@ export class GrowthRoadmaps {
       if (!this.#seen.has(e.id)) {
         this.#seen.add(e.id);
         this.#exposedAt.set(e.id, Date.now());
-        this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined, this.#attrs));
+        this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined, this.#attrs, this.#identityMeta()));
         this.#dbg('Exposure event (redirect):', e.name, '→', v.name);
         if (this.#sv) this.#sv.onExposure();
         exposed = true;
@@ -1194,7 +1234,7 @@ export class GrowthRoadmaps {
       if (!this.#seen.has(e.id)) {
         this.#seen.add(e.id);
         this.#exposedAt.set(e.id, Date.now());
-        this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined, this.#attrs));
+        this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined, this.#attrs, this.#identityMeta()));
         this.#dbg('Exposure event sent:', e.name, '→', v.name);
         if (this.#sv) this.#sv.onExposure();
       }

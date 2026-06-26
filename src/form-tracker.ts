@@ -34,9 +34,56 @@ interface CompiledFormConfig {
   formSelectors: string[];
 }
 
+const MAX_FIELD_LABEL_LENGTH = 120;
+
+function normalizeLabelText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().slice(0, MAX_FIELD_LABEL_LENGTH);
+}
+
+/** Resolve a human-readable label for a form field (exported for tests). */
+export function getFieldLabel(field: Element): string {
+  const input = field as HTMLInputElement;
+  if (field.id) {
+    const labelFor = field.ownerDocument?.querySelector(`label[for="${CSS.escape(field.id)}"]`);
+    if (labelFor?.textContent) {
+      const text = normalizeLabelText(labelFor.textContent);
+      if (text) return text;
+    }
+  }
+
+  const wrappingLabel = field.closest('label');
+  if (wrappingLabel?.textContent) {
+    const text = normalizeLabelText(wrappingLabel.textContent);
+    if (text) return text;
+  }
+
+  const ariaLabel = field.getAttribute('aria-label');
+  if (ariaLabel) {
+    const text = normalizeLabelText(ariaLabel);
+    if (text) return text;
+  }
+
+  const labelledBy = field.getAttribute('aria-labelledby');
+  if (labelledBy) {
+    const parts = labelledBy
+      .split(/\s+/)
+      .map((id) => field.ownerDocument?.getElementById(id)?.textContent ?? '')
+      .filter(Boolean);
+    if (parts.length > 0) {
+      const text = normalizeLabelText(parts.join(' '));
+      if (text) return text;
+    }
+  }
+
+  if (input.name) return input.name;
+  if (input.placeholder) return input.placeholder;
+  return getSelector(field);
+}
+
 interface FieldMetrics {
   selector: string;
   name: string;
+  label: string;
   type: string;
   index: number;
   interactions: number;
@@ -234,6 +281,7 @@ export class FormTracker {
       state.fields.set(sel, {
         selector: sel,
         name: (field as HTMLInputElement).name || (field as HTMLInputElement).placeholder || sel,
+        label: getFieldLabel(field),
         type: field.tagName === 'SELECT' ? 'select' : field.tagName === 'TEXTAREA' ? 'textarea' : (field as HTMLInputElement).type || 'text',
         index: fieldIndex++,
         interactions: 0,
@@ -398,6 +446,7 @@ export class FormTracker {
     const fields = interactedFields.map(field => ({
       field_selector: field.selector,
       field_name: field.name,
+      field_label: field.label,
       field_type: field.type,
       field_index: field.index,
       interactions: field.interactions,
