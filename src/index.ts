@@ -685,6 +685,7 @@ export class GrowthRoadmaps {
   }
 
   #pk(): string { return this.#c.projectKey || ''; }
+  #apiHost(): string { return this.#c.apiHost || DEFAULT_API_HOST; }
   #identityMeta(): Record<string, unknown> {
     refreshVisitorSessionActivity(this.#pk(), this.#visitorSessionId, this.#consent);
     return {
@@ -747,7 +748,7 @@ export class GrowthRoadmaps {
         if (reviewToken) {
           const pm = await import('./panels') as PanelsMod;
           const pr = typeof pm.__lazyLoad === 'function' ? await pm.__lazyLoad() : pm;
-          await pr.initReviewMode(this.#c.apiHost);
+          await pr.initReviewMode(this.#apiHost());
           revealPage();
           console.info('[GR] Review mode active — tracking disabled');
           return;
@@ -759,7 +760,7 @@ export class GrowthRoadmaps {
         if (builderToken) {
           const pm = await import('./panels') as PanelsMod;
           const pr = typeof pm.__lazyLoad === 'function' ? await pm.__lazyLoad() : pm;
-          await pr.initBuilderMode(this.#c.apiHost);
+          await pr.initBuilderMode(this.#apiHost());
           this.#pv = true;
           revealPage();
           console.info('[GR] AI Builder mode active — tracking disabled');
@@ -1314,7 +1315,7 @@ export class GrowthRoadmaps {
     try {
       const mod = await import('./survey') as SurveyModule & LazyModule<SurveyModule>;
       const resolved = typeof mod.__lazyLoad === 'function' ? await mod.__lazyLoad() : mod;
-      this.#sv = new resolved.SurveyManager(this.#c.apiHost, teamId, this.#c.userId, () => {
+      this.#sv = new resolved.SurveyManager(this.#apiHost(), teamId, this.#c.userId, () => {
         const map = new Map<string, { variantId: string; exposedAt: number | null }>();
         for (const [eid, v] of this.#a) {
           map.set(eid, { variantId: v.id, exposedAt: this.#exposedAt.get(eid) || null });
