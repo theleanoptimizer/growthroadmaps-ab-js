@@ -34,6 +34,40 @@ function seedBootstrapCache(): void {
   );
 }
 
+function seedRolloutBootstrapCache(): void {
+  const now = Date.now();
+  localStorage.setItem(
+    'ab_cfg_' + PROJECT_KEY,
+    JSON.stringify({
+      timestamp: now,
+      experiments: [
+        {
+          id: 'exp-rollout-1',
+          status: 'rolling_out',
+          mode: 'client',
+          rollout_variant_id: 'exp-rollout-1-winner',
+          url_rules: [],
+          variants: [
+            { id: 'exp-rollout-1-ctrl', css: '.ctrl{color:red}' },
+            { id: 'exp-rollout-1-winner', css: '.winner{color:green}' },
+          ],
+        },
+      ],
+    }),
+  );
+  localStorage.setItem(
+    'ab_va_' + PROJECT_KEY,
+    JSON.stringify({
+      'exp-rollout-1': {
+        variantId: 'exp-rollout-1-ctrl',
+        css: '.ctrl{color:red}',
+        external_css: [],
+        external_js: [],
+      },
+    }),
+  );
+}
+
 describe('isSpecialSdkMode', () => {
   it('returns true for preview, review, builder, and gr_preview params', () => {
     expect(isSpecialSdkMode('?_ab_preview=token')).toBe(true);
@@ -53,6 +87,7 @@ describe('runExperimentBootstrap', () => {
   beforeEach(() => {
     localStorage.clear();
     document.documentElement.style.opacity = '';
+    document.head.querySelectorAll('style[data-ab-css], link[data-ab-ext-css]').forEach(el => el.remove());
     delete (window as any).__gr_loader_ran;
     delete (window as any).__ab_reveal;
     (window as any).__gr_loader_cfg = { pk: PROJECT_KEY };
@@ -98,5 +133,49 @@ describe('runExperimentBootstrap', () => {
     expect(style).not.toBeNull();
     expect(style?.textContent).toContain('background: red');
     expect(typeof (window as any).__ab_reveal).toBe('function');
+  });
+
+  it('applies rollout winner CSS when status is rolling_out', () => {
+    seedRolloutBootstrapCache();
+
+    runExperimentBootstrap();
+
+    expect(document.querySelector('style[data-ab-css="exp-rollout-1-winner"]')).not.toBeNull();
+    expect(document.querySelector('style[data-ab-css="exp-rollout-1-winner"]')?.textContent).toContain('color:green');
+    expect(document.querySelector('style[data-ab-css="exp-rollout-1-ctrl"]')).toBeNull();
+    expect(typeof (window as any).__ab_reveal).toBe('function');
+  });
+
+  it('does not bootstrap rolling_out experiment when config cache is stale', () => {
+    const stale = Date.now() - 120_000;
+    localStorage.setItem(
+      'ab_cfg_' + PROJECT_KEY,
+      JSON.stringify({
+        timestamp: stale,
+        experiments: [
+          {
+            id: 'exp-rollout-1',
+            status: 'rolling_out',
+            mode: 'client',
+            rollout_variant_id: 'exp-rollout-1-winner',
+            url_rules: [],
+            variants: [
+              { id: 'exp-rollout-1-winner', css: '.winner{color:green}' },
+            ],
+          },
+        ],
+      }),
+    );
+    localStorage.setItem(
+      'ab_va_' + PROJECT_KEY,
+      JSON.stringify({
+        'exp-rollout-1': { variantId: 'exp-rollout-1-winner', css: '.winner{color:green}' },
+      }),
+    );
+
+    runExperimentBootstrap();
+
+    expect(document.querySelector('style[data-ab-css]')).toBeNull();
+    expect((window as any).__ab_reveal).toBeUndefined();
   });
 });

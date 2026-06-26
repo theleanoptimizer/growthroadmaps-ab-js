@@ -141,7 +141,8 @@ export interface HeatmapAttentionEvent {
 
 export interface GrowthConfig {
   projectKey?: string;
-  apiHost: string;
+  /** Defaults to https://growthroadmaps.com */
+  apiHost?: string;
   userId?: string;
   sessionId?: string;
   antiFlicker?: boolean;
@@ -335,9 +336,10 @@ declare global {
     __gr_loader_ran?: boolean;
     __gr_loader_cfg?: {
       pk: string;
-      host: string;
       autoInit?: boolean;
       cookieConsent?: 'required';
+      /** @deprecated Ignored — apiHost is always https://growthroadmaps.com */
+      host?: string;
     };
     gr?: InstanceType<typeof import('./index').GrowthRoadmaps>;
     grGrantConsent?: () => void;

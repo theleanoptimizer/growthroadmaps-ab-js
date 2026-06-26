@@ -17,10 +17,11 @@ type ChatMessage = {
   timestamp?: string;
 };
 
+import { DEFAULT_API_HOST } from "./constants";
+
 function getApiHost(fallback: string): string {
   if (fallback) return fallback.replace(/\/$/, "");
-  if (typeof window === "undefined") return "";
-  return ((window as unknown as Record<string, unknown>)["__GR_API_HOST__"] as string || "").replace(/\/$/, "");
+  return DEFAULT_API_HOST;
 }
 
 function getBuilderToken(): string | null {

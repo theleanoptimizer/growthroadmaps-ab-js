@@ -28,9 +28,10 @@ interface ReviewConfig {
   notes: ReviewNote[];
 }
 
+import { DEFAULT_API_HOST } from './constants';
+
 function getApiHost(): string {
-  if (typeof window === 'undefined') return '';
-  return (window as unknown as Record<string, unknown>)['__GR_API_HOST__'] as string || '';
+  return DEFAULT_API_HOST;
 }
 
 function getReviewToken(): string | null {

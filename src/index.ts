@@ -11,6 +11,7 @@ import {
   AudienceAttributeConfig,
   GrowthCommand,
 } from './types';
+import { DEFAULT_API_HOST } from './constants';
 import { assignVariant, fnv1a } from './hasher';
 import {
   resolveVisitorIdentity,
@@ -452,9 +453,9 @@ export class GrowthRoadmaps {
       const cfg = W.__gr_loader_cfg;
       if (cfg) {
         if (!c.projectKey) c.projectKey = cfg.pk;
-        if (!c.apiHost && cfg.host) c.apiHost = cfg.host;
       }
     }
+    if (!c.apiHost) c.apiHost = DEFAULT_API_HOST;
     this.#c = c;
     this.#b = new EventBatcher(c.apiHost, c.projectKey || '', this.#debug);
     // Restore previously-detected audience attributes for this session so a
@@ -1400,10 +1401,10 @@ if (W) {
   } catch {}
 
   const loaderCfg = W.__gr_loader_cfg;
-  if (loaderCfg?.autoInit && loaderCfg.pk && loaderCfg.host) {
+  if (loaderCfg?.autoInit && loaderCfg.pk) {
     const gr = new GrowthRoadmaps({
       projectKey: loaderCfg.pk,
-      apiHost: loaderCfg.host,
+      apiHost: DEFAULT_API_HOST,
       heatmaps: true,
       surveys: true,
       antiFlicker: true,

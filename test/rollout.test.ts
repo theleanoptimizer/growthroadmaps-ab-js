@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { GrowthRoadmaps } from '../src/index';
 import { clearMemoryCache } from '../src/storage';
+import { runExperimentBootstrap } from '../src/experiment-bootstrap';
 import type { ExperimentConfig } from '../src/types';
 
 const PROJECT_KEY = 'pk_rollout_test';
@@ -31,6 +32,9 @@ describe('rollout overrides stale localStorage assignment', () => {
     sessionStorage.clear();
     clearMemoryCache();
     document.body.innerHTML = '';
+    document.head.querySelectorAll('style[data-ab-css], link[data-ab-ext-css]').forEach(el => el.remove());
+    delete (window as any).__gr_loader_ran;
+    delete (window as any).__gr_loader_cfg;
     history.replaceState({}, '', '/');
 
     // Visitor was bucketed into control while the test was running.
@@ -81,5 +85,47 @@ describe('rollout overrides stale localStorage assignment', () => {
     expect(sdk.getVariant('Rollout Experiment', 'Control')).toBe('Winner');
     expect(document.querySelector('style[data-ab-css="exp-rollout-1-winner"]')).not.toBeNull();
     expect(document.querySelector('style[data-ab-css="exp-rollout-1-ctrl"]')).toBeNull();
+  });
+
+  it('bootstrap then init both apply the rollout winner', async () => {
+    const exp = makeRollingOutExp();
+    const now = Date.now();
+
+    localStorage.setItem(
+      'ab_cfg_' + PROJECT_KEY,
+      JSON.stringify({ timestamp: now, experiments: [exp] }),
+    );
+    (window as any).__gr_loader_cfg = { pk: PROJECT_KEY };
+
+    runExperimentBootstrap();
+
+    expect(document.querySelector('style[data-ab-css="exp-rollout-1-winner"]')).not.toBeNull();
+    expect(document.querySelector('style[data-ab-css="exp-rollout-1-ctrl"]')).toBeNull();
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : (input as Request).url ?? input.toString();
+        if (url === CDN_URL || url.includes('all-configs')) {
+          return new Response(
+            JSON.stringify({
+              project: { id: 'p1', domain: 'example.com' },
+              experiments: { [exp.id]: exp },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        return new Response('{}', { status: 200 });
+      }),
+    );
+
+    sdk = new GrowthRoadmaps({ projectKey: PROJECT_KEY, apiHost: API_HOST, mutationObserver: false });
+    await sdk.init();
+
+    expect(sdk.getVariant('Rollout Experiment', 'Control')).toBe('Winner');
+    expect(document.querySelectorAll('style[data-ab-css="exp-rollout-1-winner"]').length).toBe(1);
+    expect(document.querySelector('style[data-ab-css="exp-rollout-1-ctrl"]')).toBeNull();
+
+    delete (window as any).__gr_loader_cfg;
   });
 });
