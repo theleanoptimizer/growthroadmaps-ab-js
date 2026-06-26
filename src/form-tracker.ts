@@ -162,6 +162,7 @@ export class FormTracker {
   #currentPageUrl: string;
   #configs: CompiledFormConfig[];
   #tracking = false;
+  #sessionSampled: boolean;
   #activeSelectors: string[];
   #forms = new Map<HTMLFormElement, FormState>();
   #flushedForms = new Set<string>();
@@ -174,11 +175,13 @@ export class FormTracker {
     sessionId: string | undefined,
     consentCheck: () => boolean,
     formConfigs: FormConfigInput[],
+    sessionSampled = true,
   ) {
     this.#batcher = batcher;
     this.#userId = userId;
     this.#sessionId = sessionId;
     this.#consent = consentCheck;
+    this.#sessionSampled = sessionSampled;
     this.#currentPageUrl = window.location.href;
     this.#activeSelectors = [];
 
@@ -245,6 +248,10 @@ export class FormTracker {
 
   setVariantId(vid: string): void {
     this.#variantId = vid;
+  }
+
+  setSessionSampled(sampled: boolean): void {
+    this.#sessionSampled = sampled;
   }
 
   #matchesSelectors(form: HTMLFormElement): boolean {
@@ -473,7 +480,7 @@ export class FormTracker {
       },
     };
 
-    if (this.#consent()) {
+    if (this.#consent() && this.#sessionSampled) {
       this.#batcher.push(evt);
     }
 

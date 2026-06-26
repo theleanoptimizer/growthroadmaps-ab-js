@@ -21,6 +21,11 @@ import {
   setCookie,
   type VisitorType,
 } from './visitor-identity';
+import {
+  resolveEffectiveTrackingSamplingRate,
+  resolveTrackingSessionSampled,
+  type ExperimentSamplingBypassContext,
+} from './tracking-sampling';
 
 function isExperimentActive(status: string): boolean {
   return status === 'running' || status === 'rolling_out';
@@ -395,6 +400,8 @@ export class GrowthRoadmaps {
   #ht: HeatmapTracker | null = null;
   #ft: FormTracker | null = null;
   #st: SessionTracker | null = null;
+  #behavioralTrackingInitStarted = false;
+  #trackingSampledEffective = true;
   #hc: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; sampling_rate?: number }> = [];
   #fac: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; form_selectors?: string[] }> = [];
   #sv: SurveyManager | null = null;
@@ -458,6 +465,12 @@ export class GrowthRoadmaps {
     if (!c.apiHost) c.apiHost = DEFAULT_API_HOST;
     this.#c = c;
     this.#b = new EventBatcher(c.apiHost, c.projectKey || '', this.#debug);
+    this.#b.setSessionAdmissionHandler((deniedSessionIds) => {
+      const sid = this.#c.sessionId;
+      if (sid && deniedSessionIds.includes(sid)) {
+        this.#revokeServerTrackingCap();
+      }
+    });
     // Restore previously-detected audience attributes for this session so a
     // visitor who clicked "pricing" earlier still gets that attribute on the
     // exposure fired on the next page.
@@ -657,11 +670,18 @@ export class GrowthRoadmaps {
     }
   }
 
-  async #initFormTracker(formConfigs: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; form_selectors?: string[] }>): Promise<void> {
+  async #initFormTracker(
+    formConfigs: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; form_selectors?: string[] }>,
+    sessionSampled = true,
+  ): Promise<void> {
     if (!D || formConfigs.length === 0) return;
     const mod = await import('./form-tracker') as FormTrackerModule & LazyModule<FormTrackerModule>;
     const resolved = typeof mod.__lazyLoad === 'function' ? await mod.__lazyLoad() : mod;
-    this.#ft = new resolved.FormTracker(this.#b, this.#c.userId || this.#c.sessionId || '', this.#c.sessionId, () => this.#consent, formConfigs);
+    this.#ft = new resolved.FormTracker(this.#b, this.#c.userId || this.#c.sessionId || '', this.#c.sessionId, () => this.#consent, formConfigs, sessionSampled);
+    if (this.#a.size > 0) {
+      const lastVariant = [...this.#a.values()].pop();
+      if (lastVariant) this.#ft.setVariantId(lastVariant.id);
+    }
   }
 
   async #initSessionTracker(): Promise<void> {
@@ -684,8 +704,104 @@ export class GrowthRoadmaps {
     this.#st.start();
   }
 
+  #samplingBypassCtx(): ExperimentSamplingBypassContext {
+    return {
+      userId: this.#uid() ?? '',
+      passesUrlRules: (rules) => passesRules(rules),
+      passesTargeting: (rules) => !rules?.length || rules.every(r => evalRule(r, this.#pk(), this.#c.customAttributes)),
+    };
+  }
+
+  #propagateVariantId(variantId: string): void {
+    if (this.#ht) this.#ht.setVariantId(variantId);
+    if (this.#ft) this.#ft.setVariantId(variantId);
+    if (this.#st) this.#st.setVariantId(variantId);
+  }
+
+  async #startBehavioralTracking(trackingSampled: boolean): Promise<void> {
+    if (this.#pv || !this.#c.heatmaps || this.#p?.heatmaps_enabled === false) return;
+
+    const hasAllPages = this.#p?.heatmap_all_pages_enabled === true;
+    const hasAllForms = this.#p?.form_analytics_all_forms_enabled === true;
+    const ruleSets = this.#hc.map(c => c.url_rules || []);
+    const rates = this.#hc.map(c => typeof c.sampling_rate === 'number' ? c.sampling_rate : 1.0);
+    const effectiveSamplingRate = resolveEffectiveTrackingSamplingRate(
+      this.#p?.tracking_sampling_rate,
+      rates,
+    );
+    const wantsSessionAnalysis = this.#p?.session_analysis_enabled !== false;
+    const wantsHeatmap = ruleSets.length > 0 || hasAllPages;
+
+    if (this.#behavioralTrackingInitStarted) {
+      if (trackingSampled && !this.#trackingSampledEffective) {
+        this.#trackingSampledEffective = true;
+        if (this.#ht) {
+          this.#ht.setSessionSampled(true);
+        } else if (wantsHeatmap) {
+          void this.#initHeatmap(ruleSets, hasAllPages, effectiveSamplingRate, true);
+        }
+        if (this.#ft) {
+          this.#ft.setSessionSampled(true);
+        } else if (this.#fac.length > 0 || hasAllForms) {
+          const formConfigs: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; form_selectors: string[] }> = [];
+          if (hasAllForms) {
+            formConfigs.push({ capture_mode: 'all_forms', url_rules: [], form_selectors: [] });
+          }
+          formConfigs.push(...this.#fac.map(c => ({ capture_mode: 'specific', url_rules: c.url_rules || [], form_selectors: (c.form_selectors || []) as string[] })));
+          void this.#initFormTracker(formConfigs, true);
+        }
+        if (wantsSessionAnalysis && !this.#st) {
+          void this.#initSessionTracker();
+        }
+      }
+      return;
+    }
+
+    this.#behavioralTrackingInitStarted = true;
+    this.#trackingSampledEffective = trackingSampled;
+
+    if (wantsHeatmap && !this.#ht) {
+      void this.#initHeatmap(ruleSets, hasAllPages, effectiveSamplingRate, trackingSampled);
+    }
+
+    if ((this.#fac.length > 0 || hasAllForms) && !this.#ft) {
+      const formConfigs: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; form_selectors: string[] }> = [];
+      if (hasAllForms) {
+        formConfigs.push({ capture_mode: 'all_forms', url_rules: [], form_selectors: [] });
+      }
+      formConfigs.push(...this.#fac.map(c => ({ capture_mode: 'specific', url_rules: c.url_rules || [], form_selectors: (c.form_selectors || []) as string[] })));
+      void this.#initFormTracker(formConfigs, trackingSampled);
+    }
+
+    if (wantsSessionAnalysis && trackingSampled && !this.#st) {
+      void this.#initSessionTracker();
+    }
+  }
+
+  #ensureBehavioralTrackingForExperiment(experimentId: string, trafficExcluded: boolean): void {
+    if (this.#pv || trafficExcluded) return;
+    const exp = this.#e.find(x => x.id === experimentId);
+    if (!exp || !isExperimentActive(exp.status)) return;
+    if (!passesRules(exp.url_rules)) return;
+    if (exp.targeting_rules?.length && !exp.targeting_rules.every(r => evalRule(r, this.#pk(), this.#c.customAttributes))) return;
+    if (this.#trackingSampledEffective && this.#behavioralTrackingInitStarted) return;
+    void this.#startBehavioralTracking(true);
+  }
+
   #pk(): string { return this.#c.projectKey || ''; }
   #apiHost(): string { return this.#c.apiHost || DEFAULT_API_HOST; }
+
+  /** Server rejected this session (per-minute cap); pause behavioral trackers. */
+  #revokeServerTrackingCap(): void {
+    this.#trackingSampledEffective = false;
+    if (this.#ht) this.#ht.setSessionSampled(false);
+    if (this.#ft) this.#ft.setSessionSampled(false);
+    if (this.#st) {
+      this.#st.destroy();
+      this.#st = null;
+    }
+  }
+
   #identityMeta(): Record<string, unknown> {
     refreshVisitorSessionActivity(this.#pk(), this.#visitorSessionId, this.#consent);
     return {
@@ -958,35 +1074,25 @@ export class GrowthRoadmaps {
         const hasAllForms = this.#p?.form_analytics_all_forms_enabled === true;
         const ruleSets = this.#hc.map(c => c.url_rules || []);
         const rates = this.#hc.map(c => typeof c.sampling_rate === 'number' ? c.sampling_rate : 1.0);
-        const { resolveEffectiveTrackingSamplingRate } = await import('./tracking-sampling');
         const effectiveSamplingRate = resolveEffectiveTrackingSamplingRate(
           this.#p?.tracking_sampling_rate,
           rates,
         );
         const wantsSessionAnalysis = this.#p?.session_analysis_enabled !== false;
         const wantsHeatmap = ruleSets.length > 0 || hasAllPages;
+        const wantsBehavioral = wantsHeatmap || wantsSessionAnalysis || this.#fac.length > 0 || hasAllForms;
         let trackingSampled = true;
-        if (effectiveSamplingRate < 1 && (wantsHeatmap || wantsSessionAnalysis)) {
-          const { isTrackingSessionSampled } = await import('./tracking-sampling');
-          trackingSampled = isTrackingSessionSampled(this.#pk(), effectiveSamplingRate);
+        if (effectiveSamplingRate < 1 && wantsBehavioral) {
+          trackingSampled = resolveTrackingSessionSampled(
+            this.#pk(),
+            effectiveSamplingRate,
+            this.#e,
+            this.#a,
+            this.#samplingBypassCtx(),
+          );
         }
 
-        if (wantsHeatmap) {
-          this.#initHeatmap(ruleSets, hasAllPages, effectiveSamplingRate, trackingSampled);
-        }
-
-        if (this.#fac.length > 0 || hasAllForms) {
-          const formConfigs: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; form_selectors: string[] }> = [];
-          if (hasAllForms) {
-            formConfigs.push({ capture_mode: 'all_forms', url_rules: [], form_selectors: [] });
-          }
-          formConfigs.push(...this.#fac.map(c => ({ capture_mode: 'specific', url_rules: c.url_rules || [], form_selectors: (c.form_selectors || []) as string[] })));
-          this.#initFormTracker(formConfigs);
-        }
-
-        if (wantsSessionAnalysis && trackingSampled) {
-          this.#initSessionTracker();
-        }
+        void this.#startBehavioralTracking(trackingSampled);
       }
       if (!this.#pv && this.#c.surveys && this.#p?.surveys_enabled !== false) {
         this.#initSurveys();
@@ -1061,19 +1167,20 @@ export class GrowthRoadmaps {
     } else {
       this.#dbg('getVariant: cached', name, '→', v.name);
     }
-    if (!this.#seen.has(e.id)) {
+    const firstExposure = !this.#seen.has(e.id);
+    if (firstExposure) {
       this.#seen.add(e.id);
       this.#exposedAt.set(e.id, Date.now());
       this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined, this.#attrs, this.#identityMeta()));
       this.#dbg('Exposure event sent:', name, '→', v.name);
       if (this.#sv) this.#sv.onExposure();
+      if (!ex) this.#ensureBehavioralTrackingForExperiment(e.id, ex);
     }
     if (ex) return v.name;
     if (e.ga && !this.#gf.has(e.id)) {
       try { ensureDataLayer(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; const dlEvent: Record<string, unknown> = { event: 'experience_impression', measurement_id: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name, variant_index: v.index ?? null }; W!.dataLayer.push(dlEvent); this.#gf.add(e.id); this.#dbg('GA4 dataLayer.push (experience_impression):', name, dlEvent); } catch {}
     }
-    if (this.#ht) this.#ht.setVariantId(v.id);
-    if (this.#ft) this.#ft.setVariantId(v.id);
+    this.#propagateVariantId(v.id);
     if (e.mode === 'client') { addCss(v, e.id, this.#sm); if (this.#c.mutationObserver === false || !v.selectors?.length || selectorMatchesNow(v.selectors)) this.#runVariantJs(v); }
     if (e.mode === 'redirect' && !ex && !v.is_control && v.redirect_url) {
       if (!W) return fb;
@@ -1184,12 +1291,14 @@ export class GrowthRoadmaps {
         assigned = true;
         this.#dbg('applyRedirect: assigned', e.name, '→', v.name, ex ? '(traffic excluded)' : '');
       }
-      if (!this.#seen.has(e.id)) {
+      const firstExposure = !this.#seen.has(e.id);
+      if (firstExposure) {
         this.#seen.add(e.id);
         this.#exposedAt.set(e.id, Date.now());
         this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined, this.#attrs, this.#identityMeta()));
         this.#dbg('Exposure event (redirect):', e.name, '→', v.name);
         if (this.#sv) this.#sv.onExposure();
+        if (!ex) this.#ensureBehavioralTrackingForExperiment(e.id, ex);
         exposed = true;
       }
       if (ex || v.is_control || !v.redirect_url) continue;
@@ -1237,12 +1346,14 @@ export class GrowthRoadmaps {
       } else {
         this.#dbg('applyClient: already assigned', e.name, '→', v.name);
       }
-      if (!this.#seen.has(e.id)) {
+      const firstExposure = !this.#seen.has(e.id);
+      if (firstExposure) {
         this.#seen.add(e.id);
         this.#exposedAt.set(e.id, Date.now());
         this.#pushEvent(mkEvt(e.id, v.id, u, this.#c.sessionId, ex ? { metadata: { traffic_excluded: true } } : undefined, this.#attrs, this.#identityMeta()));
         this.#dbg('Exposure event sent:', e.name, '→', v.name);
         if (this.#sv) this.#sv.onExposure();
+        if (!ex) this.#ensureBehavioralTrackingForExperiment(e.id, ex);
       }
       if (!ex) {
         if (e.ga && !this.#gf.has(e.id)) {
@@ -1250,8 +1361,7 @@ export class GrowthRoadmaps {
         }
         addCss(v, e.id, this.#sm);
         if (this.#c.mutationObserver === false || !v.selectors?.length || selectorMatchesNow(v.selectors)) this.#runVariantJs(v);
-        if (this.#ht) this.#ht.setVariantId(v.id);
-        if (this.#ft) this.#ft.setVariantId(v.id);
+        this.#propagateVariantId(v.id);
         applied = true;
       }
     }
@@ -1277,8 +1387,7 @@ export class GrowthRoadmaps {
       if (!prior || prior.id !== v.id) { this.#a.set(e.id, v); assigned = true; }
       addCss(v, e.id, this.#sm);
       if ((v.js || (v.external_js && v.external_js.length)) && (this.#c.mutationObserver === false || !v.selectors?.length || selectorMatchesNow(v.selectors))) this.#runVariantJs(v);
-      if (this.#ht) this.#ht.setVariantId(v.id);
-      if (this.#ft) this.#ft.setVariantId(v.id);
+      this.#propagateVariantId(v.id);
     }
     if (assigned) saveAssignments(this.#pk(), this.#a, this.#e, this.#exposedAt);
     this.#setupMutationObserver();
@@ -1374,6 +1483,7 @@ export class GrowthRoadmaps {
   destroy(): void {
     if (this.#ht) { this.#ht.destroy(); this.#ht = null; }
     if (this.#ft) { this.#ft.destroy(); this.#ft = null; }
+    if (this.#st) { this.#st.destroy(); this.#st = null; }
     this.#mo?.disconnect(); this.#mo = null;
     this.#b.destroy();
     for (const c of this.#cl) c();

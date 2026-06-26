@@ -118,6 +118,10 @@ export class HeatmapTracker {
     this.#variantId = vid;
   }
 
+  setSessionSampled(sampled: boolean): void {
+    this.#sessionSampled = sampled;
+  }
+
   #push(e: HeatmapClickEvent | HeatmapScrollEvent): void {
     if (!this.#consent()) return;
     if (!this.#sessionSampled) return;
