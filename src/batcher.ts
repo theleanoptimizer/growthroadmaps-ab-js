@@ -55,12 +55,13 @@ export class EventBatcher {
   #k: string;
   #debug: boolean;
   #idleFlushScheduled = false;
-  #onSessionAdmission: ((deniedSessionIds: string[]) => void) | null = null;
+  #onSessionAdmission: ((admission: Record<string, boolean>) => void) | null = null;
 
-  constructor(host: string, key: string, debug = false) {
+  constructor(host: string, key: string, debug = false, onAdmission?: (admission: Record<string, boolean>) => void) {
     this.#h = host;
     this.#k = key;
     this.#debug = debug;
+    this.#onSessionAdmission = onAdmission ?? null;
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', () => { if (document.hidden) this.#beacon(); });
     }
@@ -70,10 +71,6 @@ export class EventBatcher {
   }
 
   start(): void { if (!this.#t) this.#t = setInterval(() => { if (this.#q.length) void this.flush(); }, 2000); }
-
-  setSessionAdmissionHandler(handler: ((deniedSessionIds: string[]) => void) | null): void {
-    this.#onSessionAdmission = handler;
-  }
 
   /** Drain the queue to the server in ≤50-event POSTs. */
   async flush(): Promise<void> {
@@ -112,16 +109,9 @@ export class EventBatcher {
         if (!r.ok) { if (this.#debug) console.log('[GR Debug] Batch flush failed:', r.status); throw 0; }
         if (this.#onSessionAdmission) {
           try {
-            const data = (await r.json()) as { sessionAdmission?: Record<string, boolean> };
-            if (data.sessionAdmission && typeof data.sessionAdmission === 'object') {
-              const denied = Object.entries(data.sessionAdmission)
-                .filter(([, admitted]) => admitted === false)
-                .map(([sessionId]) => sessionId);
-              if (denied.length) this.#onSessionAdmission(denied);
-            }
-          } catch {
-            /* ignore parse errors on success responses */
-          }
+            const sa = ((await r.json()) as { sessionAdmission?: Record<string, boolean> }).sessionAdmission;
+            if (sa) this.#onSessionAdmission(sa);
+          } catch {}
         }
         if (this.#debug) console.log('[GR Debug] Batch flush success:', evts.length, 'events sent');
       } catch {

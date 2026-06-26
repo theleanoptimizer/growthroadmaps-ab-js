@@ -20,8 +20,9 @@ describe("EventBatcher sessionAdmission", () => {
     });
 
     const denied: string[] = [];
-    const batcher = new EventBatcher("https://api.example.com", "pk-test");
-    batcher.setSessionAdmissionHandler((ids) => denied.push(...ids));
+    const batcher = new EventBatcher("https://api.example.com", "pk-test", false, (sa) => {
+      for (const k in sa) if (sa[k] === false) denied.push(k);
+    });
     batcher.push({ type: "session_page_view", session_id: "sess-1" } as never);
 
     await batcher.flush();

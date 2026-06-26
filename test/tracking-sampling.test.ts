@@ -3,11 +3,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   isTrackingSessionSampled,
   resolveEffectiveTrackingSamplingRate,
-  resolveTrackingSessionSampled,
-  shouldBypassTrackingSamplingForExperiments,
-  isTrafficExcludedForExperiment,
   trackingSamplingStorageKey,
 } from "../src/tracking-sampling";
+import {
+  isTrafficExcludedForExperiment,
+  resolveTrackingSessionSampled,
+  shouldBypassTrackingSamplingForExperiments,
+} from "../src/tracking-sampling-bypass";
 import type { ExperimentConfig } from "../src/types";
 
 const runningExp: ExperimentConfig = {
@@ -154,7 +156,7 @@ describe("resolveTrackingSessionSampled", () => {
         userId: "visitor-1",
         passesUrlRules: () => true,
         passesTargeting: () => true,
-      }),
+      }, isTrackingSessionSampled),
     ).toBe(true);
   });
 
@@ -164,7 +166,7 @@ describe("resolveTrackingSessionSampled", () => {
         userId: "visitor-1",
         passesUrlRules: () => true,
         passesTargeting: () => true,
-      }),
+      }, isTrackingSessionSampled),
     ).toBe(false);
   });
 });
