@@ -844,9 +844,13 @@ export class GrowthRoadmaps {
               const fv = { id: d.variant_id, name: d.variant_name, weight: 100, css: d.css, js: d.js, external_js: d.external_js, external_css: d.external_css } as Variant;
               if (d.mode === 'client') { addCss(fv, '', this.#sm); loadExternalJs(fv).then(function() { runJs(fv); }); }
               console.info('[GR] Preview: ' + d.variant_name + ' (' + d.experiment_name + ')');
+              revealPage();
               return;
             }
-          } catch {}
+            console.warn('[GR] Preview token rejected (status ' + r.status + ')');
+          } catch {
+            console.warn('[GR] Preview fetch failed');
+          }
         }
       }
       const pk = this.#pk();

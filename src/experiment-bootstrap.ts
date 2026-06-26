@@ -3,6 +3,17 @@
  * redirect-mode bucketing. Skips entirely when localStorage has no fresh cache
  * with URL-eligible running experiments (fast path for behavioral-only sites).
  */
+
+/** Preview/review/builder URLs must not replay cached assignments or redirect. */
+export function isSpecialSdkMode(s?: string): boolean {
+  try {
+    const p = new URLSearchParams(s ?? location.search);
+    return !!(p.get('_ab_preview') || p.get('_ab_review') || p.get('_ab_builder') || p.get('gr_preview'));
+  } catch {
+    return false;
+  }
+}
+
 export function runExperimentBootstrap(): void {
   const W = window as any;
   const D = document;
@@ -12,6 +23,8 @@ export function runExperimentBootstrap(): void {
   const cfg = W.__gr_loader_cfg;
   if (!cfg || !cfg.pk) return;
   W.__gr_loader_ran = true;
+  if (isSpecialSdkMode()) return;
+
   const pk = cfg.pk as string;
 
   let cfgRaw: string | null;
