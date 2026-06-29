@@ -3,6 +3,7 @@ import type { SessionEvent } from './types';
 import { registerClickHandler } from './click-delegate';
 import { getDeviceType, getCurrentPagePath, nowIso, setCurrentPagePath } from './session-context';
 import { getCookie, setCookie, isLikely404Page, DOWNLOAD_EXT_RE } from './visitor-identity';
+export { isSensitiveElement, sanitizeVisibleText } from './element-privacy';
 
 type NavigationType = 'initial' | 'spa' | 'back' | 'forward';
 
@@ -66,30 +67,6 @@ export function getOrCaptureFirstTouch(projectKey: string): FirstTouchAttributio
   const captured = captureFirstTouchFromPage();
   saveFirstTouchAttribution(projectKey, captured);
   return captured;
-}
-
-const SENSITIVE_SELECTOR_RE =
-  /input\[type=(?:password|email|tel|hidden)\]|autocomplete=["']cc-|data-gr-mask/i;
-
-export function isSensitiveElement(el: Element | null): boolean {
-  if (!el) return false;
-  if (el.matches('input[type=password],input[type=email],input[type=tel],input[type=hidden],[autocomplete^="cc-"],[data-gr-mask]')) {
-    return true;
-  }
-  return SENSITIVE_SELECTOR_RE.test(getSelector(el));
-}
-
-function getSelector(el: Element): string {
-  if (el.id) return '#' + el.id;
-  const tag = el.tagName.toLowerCase();
-  const cls = Array.from(el.classList).slice(0, 3).join('.');
-  return cls ? `${tag}.${cls}` : tag;
-}
-
-export function sanitizeVisibleText(el: Element | null): string | undefined {
-  if (!el || isSensitiveElement(el)) return undefined;
-  const text = (el.textContent || '').trim().replace(/\s+/g, ' ');
-  return text.slice(0, 120) || undefined;
 }
 
 const SPA_PAGE_VIEW_DEBOUNCE_MS = 100;

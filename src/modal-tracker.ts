@@ -1,7 +1,7 @@
 import { EventBatcher } from './batcher';
 import { registerClickHandler } from './click-delegate';
 import { getCurrentPagePath, getDeviceType, nowIso } from './session-context';
-import { isSensitiveElement, sanitizeVisibleText } from './session-tracker';
+import { isSensitiveElement, sanitizeVisibleText } from './element-privacy';
 
 const MODAL_DETECT_MS = 500;
 const MODAL_OBSERVER_MS = 8000;
