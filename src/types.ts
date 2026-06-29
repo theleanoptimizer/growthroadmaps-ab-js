@@ -91,7 +91,10 @@ export interface SessionEvent {
     | 'session_performance'
     | 'session_scroll_milestone'
     | 'session_file_download'
-    | 'session_not_found';
+    | 'session_not_found'
+    | 'session_modal_open'
+    | 'session_modal_step'
+    | 'session_modal_close';
   experiment_id?: string;
   variant_id?: string;
   user_id: string;
@@ -151,6 +154,8 @@ export interface GrowthConfig {
   heatmaps?: boolean;
   surveys?: boolean | SurveyConfig;
   mutationObserver?: boolean;
+  /** Track multi-step modal/dialog flows for session analysis (default: true when session analysis is on). */
+  modalTracking?: boolean;
 }
 
 export interface SurveyConfig {

@@ -58,6 +58,7 @@ import { getAntiFlickerSnippet, revealPage } from './anti-flicker';
 import type { HeatmapTracker } from './heatmap';
 import type { FormTracker } from './form-tracker';
 import type { SessionTracker } from './session-tracker';
+import type { ModalTracker } from './modal-tracker';
 import type { SurveyManager } from './survey';
 import type { SurveyData } from './types';
 import type { setupGoals as _setupGoals, checkUrlGoals as _checkUrlGoals, GoalContext } from './goals';
@@ -70,6 +71,7 @@ interface LazyModule<T> {
 type HeatmapModule = { HeatmapTracker: typeof HeatmapTracker };
 type FormTrackerModule = { FormTracker: typeof FormTracker };
 type SessionTrackerModule = { SessionTracker: typeof SessionTracker };
+type ModalTrackerModule = { ModalTracker: typeof ModalTracker };
 type SurveyModule = { SurveyManager: typeof SurveyManager };
 type GoalsModule = { setupGoals: typeof _setupGoals; checkUrlGoals: typeof _checkUrlGoals };
 type AudienceModule = { setupAudience: typeof _setupAudience };
@@ -395,6 +397,7 @@ export class GrowthRoadmaps {
   #ht: HeatmapTracker | null = null;
   #ft: FormTracker | null = null;
   #st: SessionTracker | null = null;
+  #mt: ModalTracker | null = null;
   #trackingSampledEffective = true;
   #hc: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; sampling_rate?: number }> = [];
   #fac: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; form_selectors?: string[] }> = [];
@@ -691,6 +694,26 @@ export class GrowthRoadmaps {
     this.#st.start();
   }
 
+  async #initModalTracker(): Promise<void> {
+    if (!D) return;
+    if (this.#c.modalTracking === false) return;
+    const mod = await import('./modal-tracker') as ModalTrackerModule & LazyModule<ModalTrackerModule>;
+    const resolved = typeof mod.__lazyLoad === 'function' ? await mod.__lazyLoad() : mod;
+    this.#mt = new resolved.ModalTracker(
+      this.#b,
+      this.#c.userId || this.#c.sessionId || '',
+      this.#c.sessionId || '',
+      () => this.#consent,
+      () => this.#p?.session_analysis_enabled !== false && this.#c.modalTracking !== false,
+      () => this.#identityMeta(),
+    );
+    if (this.#a.size > 0) {
+      const lastVariant = [...this.#a.values()].pop();
+      if (lastVariant) this.#mt.setVariantId(lastVariant.id);
+    }
+    this.#mt.start();
+  }
+
   #pk(): string { return this.#c.projectKey || ''; }
   #apiHost(): string { return this.#c.apiHost || DEFAULT_API_HOST; }
 
@@ -702,6 +725,10 @@ export class GrowthRoadmaps {
       this.#st.destroy();
       this.#st = null;
     }
+    if (this.#mt) {
+      this.#mt.destroy();
+      this.#mt = null;
+    }
   }
 
   #enableExperimentTracking(): void {
@@ -710,6 +737,9 @@ export class GrowthRoadmaps {
     this.#ht?.setSessionSampled(true);
     this.#ft?.setSessionSampled(true);
     if (this.#p?.session_analysis_enabled !== false && !this.#st) void this.#initSessionTracker();
+    if (this.#p?.session_analysis_enabled !== false && this.#c.modalTracking !== false && !this.#mt) {
+      void this.#initModalTracker();
+    }
   }
 
   #identityMeta(): Record<string, unknown> {
@@ -1028,6 +1058,9 @@ export class GrowthRoadmaps {
 
         if (wantsSessionAnalysis && trackingSampled) {
           void this.#initSessionTracker();
+          if (this.#c.modalTracking !== false) {
+            void this.#initModalTracker();
+          }
         }
       }
       if (!this.#pv && this.#c.surveys && this.#p?.surveys_enabled !== false) {
@@ -1420,6 +1453,7 @@ export class GrowthRoadmaps {
     if (this.#ht) { this.#ht.destroy(); this.#ht = null; }
     if (this.#ft) { this.#ft.destroy(); this.#ft = null; }
     if (this.#st) { this.#st.destroy(); this.#st = null; }
+    if (this.#mt) { this.#mt.destroy(); this.#mt = null; }
     this.#mo?.disconnect(); this.#mo = null;
     this.#b.destroy();
     for (const c of this.#cl) c();
