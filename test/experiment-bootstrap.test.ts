@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { isSpecialSdkMode, runExperimentBootstrap } from '../src/experiment-bootstrap';
+import { isSpecialSdkMode, isPanelPreviewSession, runExperimentBootstrap } from '../src/experiment-bootstrap';
 
 const PROJECT_KEY = 'pk_bootstrap_test';
 
@@ -81,11 +81,27 @@ describe('isSpecialSdkMode', () => {
     expect(isSpecialSdkMode('')).toBe(false);
     expect(isSpecialSdkMode('?utm_source=google')).toBe(false);
   });
+
+  it('returns true when panel preview session is active in sessionStorage', () => {
+    sessionStorage.setItem('_ab_panel_key', 'panel-key-abc');
+    sessionStorage.setItem('_ab_panel_pk', PROJECT_KEY);
+    expect(isPanelPreviewSession(PROJECT_KEY)).toBe(true);
+    expect(isSpecialSdkMode('', PROJECT_KEY)).toBe(true);
+    expect(isSpecialSdkMode('?utm_source=google', PROJECT_KEY)).toBe(true);
+  });
+
+  it('returns false for panel session when project key does not match', () => {
+    sessionStorage.setItem('_ab_panel_key', 'panel-key-abc');
+    sessionStorage.setItem('_ab_panel_pk', 'other-project');
+    expect(isPanelPreviewSession(PROJECT_KEY)).toBe(false);
+    expect(isSpecialSdkMode('', PROJECT_KEY)).toBe(false);
+  });
 });
 
 describe('runExperimentBootstrap', () => {
   beforeEach(() => {
     localStorage.clear();
+    sessionStorage.clear();
     document.documentElement.style.opacity = '';
     document.head.querySelectorAll('style[data-ab-css], link[data-ab-ext-css]').forEach(el => el.remove());
     delete (window as any).__gr_loader_ran;
@@ -115,6 +131,20 @@ describe('runExperimentBootstrap', () => {
   it('skips bootstrap when _ab_preview=panel is present', () => {
     seedBootstrapCache();
     history.replaceState({}, '', '/?_ab_preview=panel&key=secret');
+
+    runExperimentBootstrap();
+
+    expect((window as any).__gr_loader_ran).toBe(true);
+    expect(document.documentElement.style.opacity).not.toBe('0');
+    expect(document.querySelector('style[data-ab-css]')).toBeNull();
+    expect((window as any).__ab_reveal).toBeUndefined();
+  });
+
+  it('skips bootstrap when panel preview session is active without URL params', () => {
+    seedBootstrapCache();
+    sessionStorage.setItem('_ab_panel_key', 'panel-key-abc');
+    sessionStorage.setItem('_ab_panel_pk', PROJECT_KEY);
+    history.replaceState({}, '', '/about');
 
     runExperimentBootstrap();
 

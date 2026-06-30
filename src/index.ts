@@ -55,10 +55,12 @@ function resolveVariantForUser(
 import { getCachedConfig, setCachedConfig, isCacheFresh } from './storage';
 import { EventBatcher } from './batcher';
 import { getAntiFlickerSnippet, revealPage } from './anti-flicker';
+import { isPanelPreviewSession } from './experiment-bootstrap';
 import type { HeatmapTracker } from './heatmap';
 import type { FormTracker } from './form-tracker';
 import type { SessionTracker } from './session-tracker';
 import type { ModalTracker } from './modal-tracker';
+import type { HelpWidgetTracker } from './help-widget-tracker';
 import type { SurveyManager } from './survey';
 import type { SurveyData } from './types';
 import type { setupGoals as _setupGoals, checkUrlGoals as _checkUrlGoals, GoalContext } from './goals';
@@ -72,6 +74,7 @@ type HeatmapModule = { HeatmapTracker: typeof HeatmapTracker };
 type FormTrackerModule = { FormTracker: typeof FormTracker };
 type SessionTrackerModule = { SessionTracker: typeof SessionTracker };
 type ModalTrackerModule = { ModalTracker: typeof ModalTracker };
+type HelpWidgetTrackerModule = { HelpWidgetTracker: typeof HelpWidgetTracker };
 type SurveyModule = { SurveyManager: typeof SurveyManager };
 type GoalsModule = { setupGoals: typeof _setupGoals; checkUrlGoals: typeof _checkUrlGoals };
 type AudienceModule = { setupAudience: typeof _setupAudience };
@@ -400,6 +403,7 @@ export class GrowthRoadmaps {
   #ft: FormTracker | null = null;
   #st: SessionTracker | null = null;
   #mt: ModalTracker | null = null;
+  #hw: HelpWidgetTracker | null = null;
   #trackingSampledEffective = true;
   #hc: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; sampling_rate?: number }> = [];
   #fac: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; form_selectors?: string[] }> = [];
@@ -720,8 +724,37 @@ export class GrowthRoadmaps {
     this.#mt.start();
   }
 
+  async #initHelpWidgetTracker(): Promise<void> {
+    if (!D) return;
+    if (!this.#helpWidgetTrackingEnabled()) return;
+    const mod = await import('./help-widget-tracker') as HelpWidgetTrackerModule & LazyModule<HelpWidgetTrackerModule>;
+    const resolved = typeof mod.__lazyLoad === 'function' ? await mod.__lazyLoad() : mod;
+    const customSelector = this.#p?.help_widget_selector?.trim();
+    this.#hw = new resolved.HelpWidgetTracker(
+      this.#b,
+      this.#c.userId || this.#c.sessionId || '',
+      this.#c.sessionId || '',
+      () => this.#consent,
+      () => this.#helpWidgetTrackingEnabled(),
+      () => this.#identityMeta(),
+      customSelector ? [customSelector] : undefined,
+    );
+    if (this.#a.size > 0) {
+      const lastVariant = [...this.#a.values()].pop();
+      if (lastVariant) this.#hw.setVariantId(lastVariant.id);
+    }
+    this.#hw.start();
+  }
+
   #pk(): string { return this.#c.projectKey || ''; }
   #apiHost(): string { return this.#c.apiHost || DEFAULT_API_HOST; }
+
+  #helpWidgetTrackingEnabled(): boolean {
+    return (
+      this.#p?.session_analysis_enabled !== false &&
+      this.#p?.help_widget_tracking_enabled === true
+    );
+  }
 
   #revokeServerTrackingCap(): void {
     this.#trackingSampledEffective = false;
@@ -735,6 +768,10 @@ export class GrowthRoadmaps {
       this.#mt.destroy();
       this.#mt = null;
     }
+    if (this.#hw) {
+      this.#hw.destroy();
+      this.#hw = null;
+    }
   }
 
   #enableExperimentTracking(): void {
@@ -745,6 +782,9 @@ export class GrowthRoadmaps {
     if (this.#p?.session_analysis_enabled !== false && !this.#st) void this.#initSessionTracker();
     if (this.#p?.session_analysis_enabled !== false && this.#c.modalTracking !== false && !this.#mt) {
       void this.#initModalTracker();
+    }
+    if (this.#helpWidgetTrackingEnabled() && !this.#hw) {
+      void this.#initHelpWidgetTracker();
     }
   }
 
@@ -760,7 +800,7 @@ export class GrowthRoadmaps {
   }
   #saveFiredGoals(): void { try { sessionStorage.setItem('_ab_fg_' + this.#pk(), JSON.stringify([...this.#fg])); } catch {} }
   #uid(): string | undefined { return this.#c.userId || this.#c.sessionId; }
-  #isPanelSession(): boolean { try { return !!sessionStorage.getItem('_ab_panel_key') && sessionStorage.getItem('_ab_panel_pk') === this.#pk(); } catch { return false; } }
+  #isPanelSession(): boolean { return isPanelPreviewSession(this.#pk()); }
   #getPanelKey(): string | null { try { return sessionStorage.getItem('_ab_panel_pk') === this.#pk() ? sessionStorage.getItem('_ab_panel_key') : null; } catch { return null; } }
   #clearPanelAssets(): void {
     if (!D) return;
@@ -1074,6 +1114,9 @@ export class GrowthRoadmaps {
           void this.#initSessionTracker();
           if (this.#c.modalTracking !== false) {
             void this.#initModalTracker();
+          }
+          if (this.#helpWidgetTrackingEnabled()) {
+            void this.#initHelpWidgetTracker();
           }
         }
       }
@@ -1468,6 +1511,7 @@ export class GrowthRoadmaps {
     if (this.#ft) { this.#ft.destroy(); this.#ft = null; }
     if (this.#st) { this.#st.destroy(); this.#st = null; }
     if (this.#mt) { this.#mt.destroy(); this.#mt = null; }
+    if (this.#hw) { this.#hw.destroy(); this.#hw = null; }
     this.#mo?.disconnect(); this.#mo = null;
     this.#b.destroy();
     for (const c of this.#cl) c();

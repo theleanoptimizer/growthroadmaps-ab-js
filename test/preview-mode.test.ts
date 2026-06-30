@@ -220,6 +220,58 @@ describe('preview mode API host', () => {
     expect(document.querySelector('style[data-ab-panel-css="var-winner"]')).toBeNull();
   });
 
+  it('restores preview panel on subsequent page load via sessionStorage', async () => {
+    sessionStorage.setItem('_ab_panel_key', PANEL_KEY);
+    sessionStorage.setItem('_ab_panel_pk', PROJECT_KEY);
+    history.replaceState({}, '', '/about');
+    (window as any).__gr_loader_ran = true;
+    (window as any).__gr_loader_cfg = { pk: PROJECT_KEY, host: window.location.origin };
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/api/ab/preview/panel')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            domain: 'example.com',
+            experiments: [
+              {
+                id: 'exp-1',
+                name: 'About Page Test',
+                mode: 'client',
+                traffic_percentage: 100,
+                variants: [
+                  { id: 'var-1', name: 'Control', weight: 50, is_control: true },
+                  { id: 'var-2', name: 'Variant B', weight: 50, is_control: false, css: null, js: null },
+                ],
+                url_rules: [],
+                targeting_rules: [],
+              },
+            ],
+          }),
+        });
+      }
+      if (url.includes('js.growthroadmaps.com/configs/')) {
+        return Promise.resolve({ ok: false, status: 404 });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+
+    const sdk = new GrowthRoadmaps({
+      projectKey: PROJECT_KEY,
+      apiHost: window.location.origin,
+      mutationObserver: false,
+    });
+    await sdk.init();
+
+    const panelCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes('/api/ab/preview/panel'),
+    );
+    expect(panelCall?.[0]).toBe(
+      `${DEFAULT_API_HOST}/api/ab/preview/panel?pk=${encodeURIComponent(PROJECT_KEY)}&key=${encodeURIComponent(PANEL_KEY)}`,
+    );
+    expect(document.getElementById('gr-preview-panel-host')).not.toBeNull();
+  });
+
   it('keeps explicit apiHost when legacy loader host is not set', async () => {
     const testHost = 'http://127.0.0.1:4173';
     history.replaceState({}, '', '/');

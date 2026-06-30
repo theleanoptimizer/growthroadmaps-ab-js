@@ -3,6 +3,11 @@ import { registerClickHandler } from './click-delegate';
 import { looksClickable } from './click-interactivity';
 import { ClickProximityTracker } from './click-proximity';
 import { isSensitiveElement, sanitizeVisibleText } from './element-privacy';
+import {
+  clickElementHref,
+  inferClientSectionCategory,
+  nearestSectionHeading,
+} from './section-context';
 import { getDeviceType, getCurrentPagePath, nowIso, setCurrentPagePath } from './session-context';
 import { HeatmapClickEvent, HeatmapScrollEvent, HeatmapAttentionEvent, HeatmapUrlRule } from './types';
 
@@ -165,6 +170,9 @@ export class HeatmapTracker {
         ? rawAria.trim().replace(/\s+/g, ' ').slice(0, 120)
         : undefined;
     const elementRole = target.getAttribute('role')?.trim().slice(0, 40) || undefined;
+    const sectionHeading = sensitive ? undefined : nearestSectionHeading(target);
+    const sectionCategory = sectionHeading ? inferClientSectionCategory(sectionHeading) : undefined;
+    const elementHref = sensitive ? undefined : clickElementHref(target);
 
     const evt: HeatmapClickEvent = {
       type: 'heatmap_click',
@@ -183,6 +191,9 @@ export class HeatmapTracker {
         element_text: elementText,
         aria_label: ariaLabel,
         element_role: elementRole,
+        element_href: elementHref,
+        section_heading: sectionHeading,
+        section_category: sectionCategory,
         is_interactive: interactive,
         is_rage_click: isRageClick,
         is_dead_click: isDeadClick,

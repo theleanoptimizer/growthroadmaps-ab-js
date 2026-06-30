@@ -94,7 +94,10 @@ export interface SessionEvent {
     | 'session_not_found'
     | 'session_modal_open'
     | 'session_modal_step'
-    | 'session_modal_close';
+    | 'session_modal_close'
+    | 'help_widget_open'
+    | 'help_widget_search'
+    | 'help_widget_article_view';
   experiment_id?: string;
   variant_id?: string;
   user_id: string;
@@ -176,6 +179,8 @@ export interface ProjectInfo {
   heatmaps_enabled?: boolean;
   surveys_enabled?: boolean;
   session_analysis_enabled?: boolean;
+  help_widget_tracking_enabled?: boolean;
+  help_widget_selector?: string | null;
   tracking_sampling_rate?: number;
 }
 
