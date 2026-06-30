@@ -67,8 +67,12 @@ export function sanitizeClickHref(raw: string | null | undefined): string | unde
   if (!raw?.trim()) return undefined;
   try {
     const url = new URL(raw, window.location.origin);
-    for (const key of [...url.searchParams.keys()]) {
-      if (PII_QUERY_KEYS.test(key)) url.searchParams.delete(key);
+    const keysToDelete: string[] = [];
+    url.searchParams.forEach((_, key) => {
+      if (PII_QUERY_KEYS.test(key)) keysToDelete.push(key);
+    });
+    for (const key of keysToDelete) {
+      url.searchParams.delete(key);
     }
     const out = url.href;
     return out.length > 500 ? out.slice(0, 500) : out;
