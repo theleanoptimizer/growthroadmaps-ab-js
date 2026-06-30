@@ -274,6 +274,7 @@ export function renderPreviewPanel(config: PanelConfig): void {
   });
 
   const matchedCount = experiments.filter(e => e.matchesPage).length;
+  const rolloutCount = experiments.filter(e => e.rollout).length;
 
   let collapsed = false;
   try { collapsed = sessionStorage.getItem('_ab_panel_collapsed') === '1'; } catch {}
@@ -455,6 +456,20 @@ export function renderPreviewPanel(config: PanelConfig): void {
       .rollout-badge {
         font-size: 10px; background: #f3e8ff; color: #7c3aed; padding: 1px 6px;
         border-radius: 4px; font-weight: 600; text-transform: uppercase;
+        flex-shrink: 0;
+      }
+      .rollout-variant-badge {
+        font-size: 10px; background: #ede9fe; color: #5b21b6; padding: 1px 6px;
+        border-radius: 4px; font-weight: 500; flex-shrink: 0;
+      }
+      .running-badge {
+        font-size: 10px; background: #dcfce7; color: #16a34a; padding: 1px 6px;
+        border-radius: 4px; font-weight: 600; text-transform: uppercase;
+        flex-shrink: 0;
+      }
+      .header-rollout-pill {
+        font-size: 10px; background: rgba(255,255,255,0.2); color: #fff;
+        padding: 2px 6px; border-radius: 4px; font-weight: 600; margin-left: 6px;
       }
       .exp-status {
         font-size: 11px; color: #94a3b8; margin-bottom: 6px;
@@ -557,7 +572,16 @@ export function renderPreviewPanel(config: PanelConfig): void {
     const header = document.createElement('div');
     header.className = 'panel-header';
     const headerTitle = document.createElement('span');
-    headerTitle.textContent = 'A/B Preview (' + experiments.length + ' experiment' + (experiments.length !== 1 ? 's' : '') + ')';
+    headerTitle.style.cssText = 'display:flex;align-items:center;flex-wrap:wrap;gap:2px;';
+    const titleText = document.createElement('span');
+    titleText.textContent = 'A/B Preview (' + experiments.length + ' experiment' + (experiments.length !== 1 ? 's' : '') + ')';
+    headerTitle.appendChild(titleText);
+    if (rolloutCount > 0) {
+      const rolloutPill = document.createElement('span');
+      rolloutPill.className = 'header-rollout-pill';
+      rolloutPill.textContent = rolloutCount + ' rolled out';
+      headerTitle.appendChild(rolloutPill);
+    }
     header.appendChild(headerTitle);
     const headerBtns = document.createElement('div');
     headerBtns.style.cssText = 'display:flex;align-items:center;gap:4px;';
@@ -607,8 +631,15 @@ export function renderPreviewPanel(config: PanelConfig): void {
         if (exp.rollout) {
           const rolloutSpan = document.createElement('span');
           rolloutSpan.className = 'rollout-badge';
-          rolloutSpan.textContent = 'Live rollout';
+          rolloutSpan.textContent = 'Rolled out';
           nameRow.appendChild(rolloutSpan);
+          const rolloutVariant = exp.variants.find(v => v.id === (exp.rollout_variant_id || ''));
+          if (rolloutVariant) {
+            const variantSpan = document.createElement('span');
+            variantSpan.className = 'rollout-variant-badge';
+            variantSpan.textContent = rolloutVariant.name;
+            nameRow.appendChild(variantSpan);
+          }
           if (exp.rolloutHidden) {
             const hiddenSpan = document.createElement('span');
             hiddenSpan.className = 'rollout-hidden-badge';
@@ -616,6 +647,12 @@ export function renderPreviewPanel(config: PanelConfig): void {
             nameRow.appendChild(hiddenSpan);
           }
         } else {
+          if (exp.status === 'running') {
+            const runningSpan = document.createElement('span');
+            runningSpan.className = 'running-badge';
+            runningSpan.textContent = 'Running';
+            nameRow.appendChild(runningSpan);
+          }
           const modeSpan = document.createElement('span');
           modeSpan.className = 'exp-mode';
           modeSpan.textContent = exp.mode;
@@ -651,7 +688,7 @@ export function renderPreviewPanel(config: PanelConfig): void {
         }
 
         if (exp.rollout) {
-          const rolloutVariant = exp.variants.find(v => v.id === (exp.rollout_variant_id || ''));
+          const rolloutVariant = exp.variants.find(v => v.id === (exp.rollout_variant_id || exp.selectedVariantId || ''));
           const note = document.createElement('div');
           note.className = 'rollout-note';
           if (exp.rolloutHidden) {
