@@ -2,6 +2,7 @@ import { EventBatcher } from './batcher';
 import { registerClickHandler } from './click-delegate';
 import { looksClickable } from './click-interactivity';
 import { ClickProximityTracker } from './click-proximity';
+import { isSensitiveElement, sanitizeVisibleText } from './element-privacy';
 import { getDeviceType, getCurrentPagePath, nowIso, setCurrentPagePath } from './session-context';
 import { HeatmapClickEvent, HeatmapScrollEvent, HeatmapAttentionEvent, HeatmapUrlRule } from './types';
 
@@ -156,6 +157,15 @@ export class HeatmapTracker {
       this.#clickCoalesceMap.set(key, now);
     }
 
+    const sensitive = isSensitiveElement(target);
+    const elementText = sensitive ? undefined : sanitizeVisibleText(target);
+    const rawAria = sensitive ? null : target.getAttribute('aria-label');
+    const ariaLabel =
+      rawAria && rawAria.trim()
+        ? rawAria.trim().replace(/\s+/g, ' ').slice(0, 120)
+        : undefined;
+    const elementRole = target.getAttribute('role')?.trim().slice(0, 40) || undefined;
+
     const evt: HeatmapClickEvent = {
       type: 'heatmap_click',
       variant_id: this.#variantId || '',
@@ -170,6 +180,9 @@ export class HeatmapTracker {
         viewport_height: vh,
         element_selector: getSelector(target),
         element_tag: target.tagName.toLowerCase(),
+        element_text: elementText,
+        aria_label: ariaLabel,
+        element_role: elementRole,
         is_interactive: interactive,
         is_rage_click: isRageClick,
         is_dead_click: isDeadClick,
