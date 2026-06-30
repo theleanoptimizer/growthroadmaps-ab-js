@@ -274,10 +274,14 @@ export function renderPreviewPanel(config: PanelConfig): void {
   });
 
   const matchedCount = experiments.filter(e => e.matchesPage).length;
-  const rolloutCount = experiments.filter(e => e.rollout).length;
+  const rolloutExperiments = experiments.filter(e => e.rollout);
+  const activeExperiments = experiments.filter(e => !e.rollout);
 
   let collapsed = false;
   try { collapsed = sessionStorage.getItem('_ab_panel_collapsed') === '1'; } catch {}
+
+  let rolloutsOpen = false;
+  try { rolloutsOpen = sessionStorage.getItem('_ab_panel_rollouts_open') === '1'; } catch {}
 
   let debugOn = false;
   try { debugOn = sessionStorage.getItem('_ab_panel_debug') === '1'; } catch {}
@@ -411,6 +415,101 @@ export function renderPreviewPanel(config: PanelConfig): void {
   function render() {
     shadow.innerHTML = '';
 
+    type RenderedExperiment = (typeof experiments)[number];
+
+    function appendExperimentItem(parent: HTMLElement, exp: RenderedExperiment): void {
+      const item = document.createElement('div');
+      item.className = 'exp-item';
+
+      const nameRow = document.createElement('div');
+      nameRow.className = 'exp-name';
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = exp.name;
+      nameRow.appendChild(nameSpan);
+      if (exp.rollout) {
+        const rolloutSpan = document.createElement('span');
+        rolloutSpan.className = 'rollout-badge';
+        rolloutSpan.textContent = 'Rolled out';
+        nameRow.appendChild(rolloutSpan);
+        const rolloutVariant = exp.variants.find(v => v.id === (exp.rollout_variant_id || ''));
+        if (rolloutVariant) {
+          const variantSpan = document.createElement('span');
+          variantSpan.className = 'rollout-variant-badge';
+          variantSpan.textContent = rolloutVariant.name;
+          nameRow.appendChild(variantSpan);
+        }
+        if (exp.rolloutHidden) {
+          const hiddenSpan = document.createElement('span');
+          hiddenSpan.className = 'rollout-hidden-badge';
+          hiddenSpan.textContent = 'Hidden in preview';
+          nameRow.appendChild(hiddenSpan);
+        }
+      } else {
+        if (exp.status === 'running') {
+          const runningSpan = document.createElement('span');
+          runningSpan.className = 'running-badge';
+          runningSpan.textContent = 'Running';
+          nameRow.appendChild(runningSpan);
+        }
+        const modeSpan = document.createElement('span');
+        modeSpan.className = 'exp-mode';
+        modeSpan.textContent = exp.mode;
+        nameRow.appendChild(modeSpan);
+      }
+      item.appendChild(nameRow);
+
+      const statusRow = document.createElement('div');
+      statusRow.className = 'exp-status';
+      const matchBadge = document.createElement('span');
+      matchBadge.className = 'match-badge ' + (exp.matchesPage ? 'match-yes' : 'match-no');
+      matchBadge.textContent = exp.matchesPage ? 'Matches this page' : (!exp.matchesUrl ? 'URL not matched' : 'Targeting not matched');
+      statusRow.appendChild(matchBadge);
+      item.appendChild(statusRow);
+
+      if (!exp.rollout) {
+        const select = document.createElement('select');
+        select.className = 'variant-select';
+        if (!exp.matchesPage) select.disabled = true;
+        for (const v of exp.variants) {
+          const opt = document.createElement('option');
+          opt.value = v.id;
+          opt.textContent = v.name + (v.is_control ? ' (Control)' : '');
+          if (v.id === exp.selectedVariantId) opt.selected = true;
+          select.appendChild(opt);
+        }
+        select.onchange = () => {
+          const newSel = { ...getStoredSelections(), [exp.id]: select.value };
+          setStoredSelections(newSel);
+          window.location.reload();
+        };
+        item.appendChild(select);
+      }
+
+      if (exp.rollout) {
+        const rolloutVariant = exp.variants.find(v => v.id === (exp.rollout_variant_id || exp.selectedVariantId || ''));
+        const note = document.createElement('div');
+        note.className = 'rollout-note';
+        if (exp.rolloutHidden) {
+          note.textContent = 'Rollout changes are hidden in this browser only. Live visitors still see ' + (rolloutVariant?.name || 'the winning variant') + '.';
+        } else {
+          note.textContent = '100% of matching visitors see ' + (rolloutVariant?.name || 'the winning variant') + '. Toggle off to preview the page without it.';
+        }
+        item.appendChild(note);
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'rollout-toggle-btn' + (exp.rolloutHidden ? ' off' : '');
+        toggleBtn.textContent = exp.rolloutHidden ? 'Show rollout in preview' : 'Hide rollout in preview';
+        toggleBtn.onclick = () => {
+          setRolloutDisabledInPreview(exp.id, !exp.rolloutHidden);
+          window.location.reload();
+        };
+        item.appendChild(toggleBtn);
+      }
+
+      parent.appendChild(item);
+    }
+
     const style = document.createElement('style');
     style.textContent = `
       * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -467,10 +566,28 @@ export function renderPreviewPanel(config: PanelConfig): void {
         border-radius: 4px; font-weight: 600; text-transform: uppercase;
         flex-shrink: 0;
       }
-      .header-rollout-pill {
-        font-size: 10px; background: rgba(255,255,255,0.2); color: #fff;
-        padding: 2px 6px; border-radius: 4px; font-weight: 600; margin-left: 6px;
+      .rollout-accordion {
+        border-top: 1px solid #e9d5ff;
       }
+      .rollout-accordion-trigger {
+        width: 100%; padding: 10px 16px; border: none; background: #faf5ff;
+        color: #6d28d9; font-size: 12px; font-weight: 600; cursor: pointer;
+        display: flex; align-items: center; gap: 8px; text-align: left;
+        transition: background 0.15s;
+      }
+      .rollout-accordion-trigger:hover { background: #f3e8ff; }
+      .rollout-accordion-chevron {
+        width: 14px; height: 14px; flex-shrink: 0; transition: transform 0.15s;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .rollout-accordion-chevron.open { transform: rotate(90deg); }
+      .rollout-accordion-count {
+        font-size: 10px; background: #ede9fe; color: #5b21b6; padding: 1px 6px;
+        border-radius: 4px; font-weight: 600; margin-left: auto;
+      }
+      .rollout-accordion-content { display: none; }
+      .rollout-accordion-content.open { display: block; }
+      .rollout-accordion-content .exp-item { background: #faf5ff; }
       .exp-status {
         font-size: 11px; color: #94a3b8; margin-bottom: 6px;
       }
@@ -572,16 +689,10 @@ export function renderPreviewPanel(config: PanelConfig): void {
     const header = document.createElement('div');
     header.className = 'panel-header';
     const headerTitle = document.createElement('span');
-    headerTitle.style.cssText = 'display:flex;align-items:center;flex-wrap:wrap;gap:2px;';
-    const titleText = document.createElement('span');
-    titleText.textContent = 'A/B Preview (' + experiments.length + ' experiment' + (experiments.length !== 1 ? 's' : '') + ')';
-    headerTitle.appendChild(titleText);
-    if (rolloutCount > 0) {
-      const rolloutPill = document.createElement('span');
-      rolloutPill.className = 'header-rollout-pill';
-      rolloutPill.textContent = rolloutCount + ' rolled out';
-      headerTitle.appendChild(rolloutPill);
-    }
+    const headerLabel = activeExperiments.length > 0
+      ? 'A/B Preview (' + activeExperiments.length + ' experiment' + (activeExperiments.length !== 1 ? 's' : '') + ')'
+      : 'A/B Preview';
+    headerTitle.textContent = headerLabel;
     header.appendChild(headerTitle);
     const headerBtns = document.createElement('div');
     headerBtns.style.cssText = 'display:flex;align-items:center;gap:4px;';
@@ -602,6 +713,7 @@ export function renderPreviewPanel(config: PanelConfig): void {
         sessionStorage.removeItem('_ab_panel_pk');
         sessionStorage.removeItem('_ab_panel_collapsed');
         sessionStorage.removeItem('_ab_panel_debug');
+        sessionStorage.removeItem('_ab_panel_rollouts_open');
         sessionStorage.removeItem(getRolloutDisabledStorageKey());
       } catch {}
       window.location.reload();
@@ -619,97 +731,57 @@ export function renderPreviewPanel(config: PanelConfig): void {
       empty.textContent = 'No running or rolled-out experiments found.';
       body.appendChild(empty);
     } else {
-      for (const exp of experiments) {
-        const item = document.createElement('div');
-        item.className = 'exp-item';
+      if (activeExperiments.length === 0 && rolloutExperiments.length > 0) {
+        const hint = document.createElement('div');
+        hint.className = 'no-experiments';
+        hint.style.padding = '16px';
+        hint.textContent = 'No running experiments. Expand rolled-out tests below.';
+        body.appendChild(hint);
+      }
 
-        const nameRow = document.createElement('div');
-        nameRow.className = 'exp-name';
-        const nameSpan = document.createElement('span');
-        nameSpan.textContent = exp.name;
-        nameRow.appendChild(nameSpan);
-        if (exp.rollout) {
-          const rolloutSpan = document.createElement('span');
-          rolloutSpan.className = 'rollout-badge';
-          rolloutSpan.textContent = 'Rolled out';
-          nameRow.appendChild(rolloutSpan);
-          const rolloutVariant = exp.variants.find(v => v.id === (exp.rollout_variant_id || ''));
-          if (rolloutVariant) {
-            const variantSpan = document.createElement('span');
-            variantSpan.className = 'rollout-variant-badge';
-            variantSpan.textContent = rolloutVariant.name;
-            nameRow.appendChild(variantSpan);
-          }
-          if (exp.rolloutHidden) {
-            const hiddenSpan = document.createElement('span');
-            hiddenSpan.className = 'rollout-hidden-badge';
-            hiddenSpan.textContent = 'Hidden in preview';
-            nameRow.appendChild(hiddenSpan);
-          }
-        } else {
-          if (exp.status === 'running') {
-            const runningSpan = document.createElement('span');
-            runningSpan.className = 'running-badge';
-            runningSpan.textContent = 'Running';
-            nameRow.appendChild(runningSpan);
-          }
-          const modeSpan = document.createElement('span');
-          modeSpan.className = 'exp-mode';
-          modeSpan.textContent = exp.mode;
-          nameRow.appendChild(modeSpan);
-        }
-        item.appendChild(nameRow);
+      for (const exp of activeExperiments) {
+        appendExperimentItem(body, exp);
+      }
 
-        const statusRow = document.createElement('div');
-        statusRow.className = 'exp-status';
-        const matchBadge = document.createElement('span');
-        matchBadge.className = 'match-badge ' + (exp.matchesPage ? 'match-yes' : 'match-no');
-        matchBadge.textContent = exp.matchesPage ? 'Matches this page' : (!exp.matchesUrl ? 'URL not matched' : 'Targeting not matched');
-        statusRow.appendChild(matchBadge);
-        item.appendChild(statusRow);
+      if (rolloutExperiments.length > 0) {
+        const accordion = document.createElement('div');
+        accordion.className = 'rollout-accordion';
 
-        if (!exp.rollout) {
-          const select = document.createElement('select');
-          select.className = 'variant-select';
-          if (!exp.matchesPage) select.disabled = true;
-          for (const v of exp.variants) {
-            const opt = document.createElement('option');
-            opt.value = v.id;
-            opt.textContent = v.name + (v.is_control ? ' (Control)' : '');
-            if (v.id === exp.selectedVariantId) opt.selected = true;
-            select.appendChild(opt);
-          }
-          select.onchange = () => {
-            const newSel = { ...getStoredSelections(), [exp.id]: select.value };
-            setStoredSelections(newSel);
-            window.location.reload();
-          };
-          item.appendChild(select);
+        const trigger = document.createElement('button');
+        trigger.type = 'button';
+        trigger.className = 'rollout-accordion-trigger';
+        trigger.setAttribute('aria-expanded', rolloutsOpen ? 'true' : 'false');
+
+        const chevron = document.createElement('span');
+        chevron.className = 'rollout-accordion-chevron' + (rolloutsOpen ? ' open' : '');
+        chevron.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>';
+        trigger.appendChild(chevron);
+
+        const triggerLabel = document.createElement('span');
+        triggerLabel.textContent = 'Rolled out';
+        trigger.appendChild(triggerLabel);
+
+        const countBadge = document.createElement('span');
+        countBadge.className = 'rollout-accordion-count';
+        countBadge.textContent = String(rolloutExperiments.length);
+        trigger.appendChild(countBadge);
+
+        const content = document.createElement('div');
+        content.className = 'rollout-accordion-content' + (rolloutsOpen ? ' open' : '');
+
+        trigger.onclick = () => {
+          rolloutsOpen = !rolloutsOpen;
+          try { sessionStorage.setItem('_ab_panel_rollouts_open', rolloutsOpen ? '1' : '0'); } catch {}
+          render();
+        };
+
+        for (const exp of rolloutExperiments) {
+          appendExperimentItem(content, exp);
         }
 
-        if (exp.rollout) {
-          const rolloutVariant = exp.variants.find(v => v.id === (exp.rollout_variant_id || exp.selectedVariantId || ''));
-          const note = document.createElement('div');
-          note.className = 'rollout-note';
-          if (exp.rolloutHidden) {
-            note.textContent = 'Rollout changes are hidden in this browser only. Live visitors still see ' + (rolloutVariant?.name || 'the winning variant') + '.';
-          } else {
-            note.textContent = '100% of matching visitors see ' + (rolloutVariant?.name || 'the winning variant') + '. Toggle off to preview the page without it.';
-          }
-          item.appendChild(note);
-
-          const toggleBtn = document.createElement('button');
-          toggleBtn.type = 'button';
-          toggleBtn.className = 'rollout-toggle-btn' + (exp.rolloutHidden ? ' off' : '');
-          toggleBtn.textContent = exp.rolloutHidden ? 'Show rollout in preview' : 'Hide rollout in preview';
-          toggleBtn.onclick = () => {
-            setRolloutDisabledInPreview(exp.id, !exp.rolloutHidden);
-            window.location.reload();
-          };
-          item.appendChild(toggleBtn);
-        }
-
-        body.appendChild(item);
+        accordion.appendChild(trigger);
+        accordion.appendChild(content);
+        body.appendChild(accordion);
       }
     }
 
