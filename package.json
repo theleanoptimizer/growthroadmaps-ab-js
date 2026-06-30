@@ -9,7 +9,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "node build.js",
+    "build": "node build.js && node scripts/stage-configs-for-pages.mjs",
     "clean": "rm -rf dist",
     "test:e2e": "../node_modules/.bin/playwright test --config playwright.config.ts"
   },

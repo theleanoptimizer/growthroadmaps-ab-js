@@ -457,9 +457,13 @@ export class GrowthRoadmaps {
       const cfg = W.__gr_loader_cfg;
       if (cfg) {
         if (!c.projectKey) c.projectKey = cfg.pk;
+        if (cfg.host) {
+          const h = cfg.host.replace(/\/$/, '');
+          if (!c.apiHost || c.apiHost.replace(/\/$/, '') === h) c.apiHost = DEFAULT_API_HOST;
+        }
       }
     }
-    if (!c.apiHost || (W && c.apiHost.replace(/\/$/, '') === W.location.origin)) c.apiHost = DEFAULT_API_HOST;
+    if (!c.apiHost) c.apiHost = DEFAULT_API_HOST;
     this.#c = c;
     this.#b = new EventBatcher(c.apiHost, c.projectKey || '', this.#debug, (sa) => {
       const sid = this.#c.sessionId;

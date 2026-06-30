@@ -6,6 +6,17 @@ A standalone, zero-dependency client-side JavaScript SDK for Growth Roadmaps. Th
 
 Include the SDK via a script tag or install as an ES module.
 
+### Cloudflare Pages (`js.growthroadmaps.com`)
+
+The `growthroadmaps-ab-js` repo is deployed by Cloudflare Pages on every push. The build runs `npm run build`, which also runs `scripts/stage-configs-for-pages.mjs` to copy existing `/configs/*.json` files into `dist/configs/` so SDK deploys do not remove configs published by the main app.
+
+Set these **Cloudflare Pages environment variables** (production) so the post-build step can read the current config manifest:
+
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_API_TOKEN` (Pages write access for the account)
+
+Config file bodies are fetched from `https://growthroadmaps.com/api/sdk/config/{projectKey}.json`. Local builds skip staging when those vars are unset, or when `SKIP_CONFIG_STAGING=1`.
+
 ## Usage
 
 ### Standard Script Tag (no anti-flicker)
