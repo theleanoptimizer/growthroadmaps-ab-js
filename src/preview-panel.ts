@@ -10,8 +10,11 @@ interface PanelGoal {
 interface PanelExperiment {
   id: string;
   name: string;
+  status?: string;
   mode: string;
   traffic_percentage: number;
+  rollout_status?: string | null;
+  rollout_variant_id?: string | null;
   variants: Variant[];
   url_rules: UrlRule[];
   targeting_rules: Array<{ id: string; attribute: string; operator: string; value: string }>;
@@ -21,6 +24,7 @@ interface PanelExperiment {
 interface PanelConfig {
   experiments: PanelExperiment[];
   domain: string;
+  project_key?: string;
 }
 
 interface DebugLogEntry {
@@ -150,6 +154,40 @@ function setStoredSelections(sel: Record<string, string>): void {
   try { sessionStorage.setItem(getPanelStorageKey(), JSON.stringify(sel)); } catch {}
 }
 
+function getRolloutDisabledStorageKey(): string {
+  try {
+    const pk = sessionStorage.getItem('_ab_panel_pk');
+    return pk ? '_ab_panel_rollout_off_' + pk : '_ab_panel_rollout_off';
+  } catch { return '_ab_panel_rollout_off'; }
+}
+
+export function getDisabledRolloutIds(): Set<string> {
+  try {
+    const raw = sessionStorage.getItem(getRolloutDisabledStorageKey());
+    if (raw) return new Set(JSON.parse(raw) as string[]);
+  } catch {}
+  return new Set();
+}
+
+export function isRolloutDisabledInPreview(experimentId: string): boolean {
+  return getDisabledRolloutIds().has(experimentId);
+}
+
+function setRolloutDisabledInPreview(experimentId: string, disabled: boolean): void {
+  const ids = getDisabledRolloutIds();
+  if (disabled) ids.add(experimentId);
+  else ids.delete(experimentId);
+  try {
+    const key = getRolloutDisabledStorageKey();
+    if (ids.size === 0) sessionStorage.removeItem(key);
+    else sessionStorage.setItem(key, JSON.stringify([...ids]));
+  } catch {}
+}
+
+function isRolloutExperiment(exp: PanelExperiment): boolean {
+  return exp.status === 'rolling_out' || exp.rollout_status === 'active';
+}
+
 export function applyPanelVariant(exp: PanelExperiment, variantId: string): void {
   const v = exp.variants.find(x => x.id === variantId);
   if (!v) return;
@@ -221,12 +259,18 @@ export function renderPreviewPanel(config: PanelConfig): void {
   const selections = getStoredSelections();
   const currentUrl = window.location.href;
 
+  const disabledRollouts = getDisabledRolloutIds();
+
   const experiments = config.experiments.map(exp => {
     const matchesUrl = passesUrlRules(exp.url_rules);
     const matchesTargeting = passesTargetingRules(exp.targeting_rules);
     const matchesPage = matchesUrl && matchesTargeting;
-    const selectedVariantId = selections[exp.id] || (exp.variants[0]?.id || '');
-    return { ...exp, matchesUrl, matchesTargeting, matchesPage, selectedVariantId };
+    const rollout = isRolloutExperiment(exp);
+    const rolloutHidden = rollout && disabledRollouts.has(exp.id);
+    const selectedVariantId = rollout
+      ? (rolloutHidden ? '' : (exp.rollout_variant_id || exp.variants[0]?.id || ''))
+      : (selections[exp.id] || (exp.variants[0]?.id || ''));
+    return { ...exp, matchesUrl, matchesTargeting, matchesPage, selectedVariantId, rollout, rolloutHidden };
   });
 
   const matchedCount = experiments.filter(e => e.matchesPage).length;
@@ -260,14 +304,16 @@ export function renderPreviewPanel(config: PanelConfig): void {
       const selectedVariant = exp.variants.find(v => v.id === exp.selectedVariantId);
       const variantLabel = selectedVariant ? selectedVariant.name : 'unknown';
 
-      if (exp.matchesPage) {
+      if (exp.rolloutHidden) {
+        addDebugLog('skip', exp.name + ' rollout hidden in this preview session');
+      } else if (exp.matchesPage) {
         addDebugLog('match', exp.name + ' matched this page → ' + variantLabel);
       } else {
         const reason = !exp.matchesUrl ? 'URL rules not matched' : 'targeting rules not matched';
         addDebugLog('skip', exp.name + ' skipped (' + reason + ')');
       }
 
-      if (!exp.goals?.length || !exp.matchesPage) continue;
+      if (!exp.goals?.length || !exp.matchesPage || exp.rolloutHidden) continue;
 
       for (const goal of exp.goals) {
         if (goal.goal_type === 'url_match' && goal.value) {
@@ -406,6 +452,10 @@ export function renderPreviewPanel(config: PanelConfig): void {
         font-size: 10px; background: #e2e8f0; color: #64748b; padding: 1px 6px;
         border-radius: 4px; font-weight: 500; text-transform: uppercase;
       }
+      .rollout-badge {
+        font-size: 10px; background: #f3e8ff; color: #7c3aed; padding: 1px 6px;
+        border-radius: 4px; font-weight: 600; text-transform: uppercase;
+      }
       .exp-status {
         font-size: 11px; color: #94a3b8; margin-bottom: 6px;
       }
@@ -422,6 +472,23 @@ export function renderPreviewPanel(config: PanelConfig): void {
       }
       .variant-select:focus { border-color: #6366f1; }
       .variant-select:disabled { opacity: 0.5; cursor: not-allowed; }
+      .rollout-toggle-btn {
+        margin-top: 8px; width: 100%; padding: 6px 10px; font-size: 12px;
+        border: 1px solid #c4b5fd; border-radius: 6px; background: #f5f3ff;
+        color: #6d28d9; cursor: pointer; font-weight: 600; transition: background 0.15s;
+      }
+      .rollout-toggle-btn:hover { background: #ede9fe; }
+      .rollout-toggle-btn.off {
+        border-color: #e2e8f0; background: #fff; color: #64748b;
+      }
+      .rollout-toggle-btn.off:hover { border-color: #cbd5e1; background: #f8fafc; }
+      .rollout-note {
+        margin-top: 6px; font-size: 11px; color: #7c3aed; line-height: 1.35;
+      }
+      .rollout-hidden-badge {
+        font-size: 10px; background: #fef3c7; color: #b45309; padding: 1px 6px;
+        border-radius: 4px; font-weight: 600; text-transform: uppercase;
+      }
       .no-experiments {
         padding: 24px 16px; text-align: center; color: #94a3b8; font-size: 13px;
       }
@@ -511,6 +578,7 @@ export function renderPreviewPanel(config: PanelConfig): void {
         sessionStorage.removeItem('_ab_panel_pk');
         sessionStorage.removeItem('_ab_panel_collapsed');
         sessionStorage.removeItem('_ab_panel_debug');
+        sessionStorage.removeItem(getRolloutDisabledStorageKey());
       } catch {}
       window.location.reload();
     };
@@ -524,7 +592,7 @@ export function renderPreviewPanel(config: PanelConfig): void {
     if (experiments.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'no-experiments';
-      empty.textContent = 'No running experiments found.';
+      empty.textContent = 'No running or rolled-out experiments found.';
       body.appendChild(empty);
     } else {
       for (const exp of experiments) {
@@ -536,10 +604,23 @@ export function renderPreviewPanel(config: PanelConfig): void {
         const nameSpan = document.createElement('span');
         nameSpan.textContent = exp.name;
         nameRow.appendChild(nameSpan);
-        const modeSpan = document.createElement('span');
-        modeSpan.className = 'exp-mode';
-        modeSpan.textContent = exp.mode;
-        nameRow.appendChild(modeSpan);
+        if (exp.rollout) {
+          const rolloutSpan = document.createElement('span');
+          rolloutSpan.className = 'rollout-badge';
+          rolloutSpan.textContent = 'Live rollout';
+          nameRow.appendChild(rolloutSpan);
+          if (exp.rolloutHidden) {
+            const hiddenSpan = document.createElement('span');
+            hiddenSpan.className = 'rollout-hidden-badge';
+            hiddenSpan.textContent = 'Hidden in preview';
+            nameRow.appendChild(hiddenSpan);
+          }
+        } else {
+          const modeSpan = document.createElement('span');
+          modeSpan.className = 'exp-mode';
+          modeSpan.textContent = exp.mode;
+          nameRow.appendChild(modeSpan);
+        }
         item.appendChild(nameRow);
 
         const statusRow = document.createElement('div');
@@ -550,22 +631,47 @@ export function renderPreviewPanel(config: PanelConfig): void {
         statusRow.appendChild(matchBadge);
         item.appendChild(statusRow);
 
-        const select = document.createElement('select');
-        select.className = 'variant-select';
-        if (!exp.matchesPage) select.disabled = true;
-        for (const v of exp.variants) {
-          const opt = document.createElement('option');
-          opt.value = v.id;
-          opt.textContent = v.name + (v.is_control ? ' (Control)' : '');
-          if (v.id === exp.selectedVariantId) opt.selected = true;
-          select.appendChild(opt);
+        if (!exp.rollout) {
+          const select = document.createElement('select');
+          select.className = 'variant-select';
+          if (!exp.matchesPage) select.disabled = true;
+          for (const v of exp.variants) {
+            const opt = document.createElement('option');
+            opt.value = v.id;
+            opt.textContent = v.name + (v.is_control ? ' (Control)' : '');
+            if (v.id === exp.selectedVariantId) opt.selected = true;
+            select.appendChild(opt);
+          }
+          select.onchange = () => {
+            const newSel = { ...getStoredSelections(), [exp.id]: select.value };
+            setStoredSelections(newSel);
+            window.location.reload();
+          };
+          item.appendChild(select);
         }
-        select.onchange = () => {
-          const newSel = { ...getStoredSelections(), [exp.id]: select.value };
-          setStoredSelections(newSel);
-          window.location.reload();
-        };
-        item.appendChild(select);
+
+        if (exp.rollout) {
+          const rolloutVariant = exp.variants.find(v => v.id === (exp.rollout_variant_id || ''));
+          const note = document.createElement('div');
+          note.className = 'rollout-note';
+          if (exp.rolloutHidden) {
+            note.textContent = 'Rollout changes are hidden in this browser only. Live visitors still see ' + (rolloutVariant?.name || 'the winning variant') + '.';
+          } else {
+            note.textContent = '100% of matching visitors see ' + (rolloutVariant?.name || 'the winning variant') + '. Toggle off to preview the page without it.';
+          }
+          item.appendChild(note);
+
+          const toggleBtn = document.createElement('button');
+          toggleBtn.type = 'button';
+          toggleBtn.className = 'rollout-toggle-btn' + (exp.rolloutHidden ? ' off' : '');
+          toggleBtn.textContent = exp.rolloutHidden ? 'Show rollout in preview' : 'Hide rollout in preview';
+          toggleBtn.onclick = () => {
+            setRolloutDisabledInPreview(exp.id, !exp.rolloutHidden);
+            window.location.reload();
+          };
+          item.appendChild(toggleBtn);
+        }
+
         body.appendChild(item);
       }
     }

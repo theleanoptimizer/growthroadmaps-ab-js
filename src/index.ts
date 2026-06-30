@@ -83,6 +83,8 @@ const NOOP_AUDIENCE: AudienceModule = {
 type PanelsResolvedModule = {
   renderPreviewPanel: (c: unknown) => void;
   getStoredSelections: () => Record<string, string>;
+  getDisabledRolloutIds: () => Set<string>;
+  isRolloutDisabledInPreview: (experimentId: string) => boolean;
   applyPanelVariant: (exp: unknown, variantId: string) => void;
   initReviewMode: (apiHost: string) => Promise<void>;
   initBuilderMode: (apiHost: string) => Promise<void>;
@@ -877,7 +879,11 @@ export class GrowthRoadmaps {
                 for (const exp of panelConfig.experiments) {
                   if (!passesRules(exp.url_rules)) continue;
                   if (exp.targeting_rules?.length && !exp.targeting_rules.every((tr: {id?:string;attribute:string;operator:string;value:string}) => evalRule(tr as TargetingRule, pk, this.#c.customAttributes))) continue;
-                  const selectedId = selections[exp.id] || (exp.variants[0]?.id || '');
+                  const isRollout = exp.status === 'rolling_out' || exp.rollout_status === 'active';
+                  if (isRollout && pr.isRolloutDisabledInPreview(exp.id)) continue;
+                  const selectedId = isRollout
+                    ? (exp.rollout_variant_id || exp.variants[0]?.id || '')
+                    : (selections[exp.id] || (exp.variants[0]?.id || ''));
                   if (selectedId) {
                     pr.applyPanelVariant(exp, selectedId);
                   }

@@ -121,6 +121,105 @@ describe('preview mode API host', () => {
     expect(document.getElementById('gr-preview-panel-host')).not.toBeNull();
   });
 
+  it('shows live rollout experiments in the preview panel', async () => {
+    history.replaceState({}, '', `/?_ab_preview=panel&key=${PANEL_KEY}`);
+    (window as any).__gr_loader_ran = true;
+    (window as any).__gr_loader_cfg = { pk: PROJECT_KEY, host: window.location.origin };
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/api/ab/preview/panel')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            domain: 'example.com',
+            project_key: PROJECT_KEY,
+            experiments: [
+              {
+                id: 'exp-rollout',
+                name: 'Winner rollout',
+                status: 'rolling_out',
+                mode: 'client',
+                traffic_percentage: 100,
+                rollout_status: 'active',
+                rollout_variant_id: 'var-winner',
+                variants: [
+                  { id: 'var-control', name: 'Control', weight: 0, is_control: true },
+                  { id: 'var-winner', name: 'Winner', weight: 100, is_control: false, css: 'body { color: green; }', js: null },
+                ],
+                url_rules: [],
+                targeting_rules: [],
+              },
+            ],
+          }),
+        });
+      }
+      if (url.includes('js.growthroadmaps.com/configs/')) {
+        return Promise.resolve({ ok: false, status: 404 });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+
+    const sdk = new GrowthRoadmaps({
+      projectKey: PROJECT_KEY,
+      apiHost: window.location.origin,
+      mutationObserver: false,
+    });
+    await sdk.init();
+
+    const host = document.getElementById('gr-preview-panel-host');
+    expect(host).not.toBeNull();
+    // Closed shadow root — verify rollout variant was applied (not session override)
+    expect(document.querySelector('style[data-ab-panel-css="var-winner"]')).not.toBeNull();
+    expect(document.querySelector('style[data-ab-panel-css="var-control"]')).toBeNull();
+  });
+
+  it('skips rollout variant when hidden in preview session', async () => {
+    history.replaceState({}, '', `/?_ab_preview=panel&key=${PANEL_KEY}`);
+    (window as any).__gr_loader_ran = true;
+    (window as any).__gr_loader_cfg = { pk: PROJECT_KEY, host: window.location.origin };
+    sessionStorage.setItem('_ab_panel_rollout_off_' + PROJECT_KEY, JSON.stringify(['exp-rollout']));
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/api/ab/preview/panel')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            domain: 'example.com',
+            project_key: PROJECT_KEY,
+            experiments: [
+              {
+                id: 'exp-rollout',
+                name: 'Winner rollout',
+                status: 'rolling_out',
+                mode: 'client',
+                traffic_percentage: 100,
+                rollout_status: 'active',
+                rollout_variant_id: 'var-winner',
+                variants: [
+                  { id: 'var-control', name: 'Control', weight: 0, is_control: true },
+                  { id: 'var-winner', name: 'Winner', weight: 100, is_control: false, css: 'body { color: green; }', js: null },
+                ],
+                url_rules: [],
+                targeting_rules: [],
+              },
+            ],
+          }),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+
+    const sdk = new GrowthRoadmaps({
+      projectKey: PROJECT_KEY,
+      apiHost: window.location.origin,
+      mutationObserver: false,
+    });
+    await sdk.init();
+
+    expect(document.getElementById('gr-preview-panel-host')).not.toBeNull();
+    expect(document.querySelector('style[data-ab-panel-css="var-winner"]')).toBeNull();
+  });
+
   it('keeps explicit apiHost when legacy loader host is not set', async () => {
     const testHost = 'http://127.0.0.1:4173';
     history.replaceState({}, '', '/');
