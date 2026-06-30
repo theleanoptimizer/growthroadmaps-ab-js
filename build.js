@@ -87,6 +87,7 @@ const lazyAudiencePlugin      = createLazyPlugin("audience", "__grAudience", {
 const lazyFormTrackerPlugin   = createLazyPlugin("form-tracker",  "__grFormTracker");
 const lazySessionTrackerPlugin = createLazyPlugin("session-tracker", "__grSessionTracker");
 const lazyModalTrackerPlugin   = createLazyPlugin("modal-tracker", "__grModalTracker");
+const lazyHelpWidgetTrackerPlugin = createLazyPlugin("help-widget-tracker", "__grHelpWidgetTracker");
 
 const corePlugins = [
   lazyHeatmapPlugin,
@@ -98,6 +99,7 @@ const corePlugins = [
   lazyFormTrackerPlugin,
   lazySessionTrackerPlugin,
   lazyModalTrackerPlugin,
+  lazyHelpWidgetTrackerPlugin,
 ];
 
 const sharedOptions = {
@@ -225,6 +227,17 @@ async function build() {
   });
 
   await esbuild.build({
+    entryPoints: ["src/help-widget-tracker.ts"],
+    bundle: true,
+    platform: "browser",
+    target: "es2022",
+    format: "iife",
+    globalName: "__grHelpWidgetTracker",
+    ...minifyOptions,
+    outfile: "dist/help-widget-tracker.min.js",
+  });
+
+  await esbuild.build({
     entryPoints: ["src/survey.ts"],
     bundle: true,
     platform: "browser",
@@ -287,6 +300,8 @@ async function build() {
   const stSizeKB = (stFile.size / 1024).toFixed(2);
   const mtFile = fs.statSync("dist/modal-tracker.min.js");
   const mtSizeKB = (mtFile.size / 1024).toFixed(2);
+  const hwFile = fs.statSync("dist/help-widget-tracker.min.js");
+  const hwSizeKB = (hwFile.size / 1024).toFixed(2);
 
   console.log("\nBuild complete!");
   console.log("  dist/growth.min.js       " + sizeKB + " KB raw / " + gzKB + " KB gzip — core bundle");
@@ -298,14 +313,15 @@ async function build() {
   console.log("  dist/heatmap.min.js      " + heatmapSizeKB + " KB — lazy chunk");
   console.log("  dist/session-tracker.min.js " + stSizeKB + " KB — lazy chunk");
   console.log("  dist/modal-tracker.min.js   " + mtSizeKB + " KB — lazy chunk");
+  console.log("  dist/help-widget-tracker.min.js " + hwSizeKB + " KB — lazy chunk");
   console.log("  dist/survey.min.js       " + surveySizeKB + " KB — lazy chunk");
   console.log("  dist/survey-widget.min.js " + surveyWidgetSizeKB + " KB — lazy chunk");
   console.log("  dist/growth.esm.js");
   console.log("  dist/growth.umd.js");
   console.log("  dist/index.d.ts");
 
-  // Gzip budget: core bundle (growth.min.js). ~13 KB after session-admission + modal tracking hooks.
-  const GZ_BUDGET = 13450;
+  // Gzip budget: core bundle (growth.min.js). ~13.3 KB with session + modal + help-widget lazy stubs.
+  const GZ_BUDGET = 13650;
   if (gz > GZ_BUDGET) {
     console.error(
       "\nERROR: Core bundle gzipped size is " + gz + " bytes (" + gzKB + " KB) — exceeds " + GZ_BUDGET + " byte budget!"

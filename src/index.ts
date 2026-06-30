@@ -697,10 +697,7 @@ export class GrowthRoadmaps {
       this.#pk(),
       () => this.#identityMeta(),
     );
-    if (this.#a.size > 0) {
-      const lastVariant = [...this.#a.values()].pop();
-      if (lastVariant) this.#st.setVariantId(lastVariant.id);
-    }
+    this.#attachActiveVariant(this.#st);
     this.#st.start();
   }
 
@@ -717,44 +714,36 @@ export class GrowthRoadmaps {
       () => this.#p?.session_analysis_enabled !== false && this.#c.modalTracking !== false,
       () => this.#identityMeta(),
     );
-    if (this.#a.size > 0) {
-      const lastVariant = [...this.#a.values()].pop();
-      if (lastVariant) this.#mt.setVariantId(lastVariant.id);
-    }
+    this.#attachActiveVariant(this.#mt);
     this.#mt.start();
   }
 
   async #initHelpWidgetTracker(): Promise<void> {
     if (!D) return;
-    if (!this.#helpWidgetTrackingEnabled()) return;
     const mod = await import('./help-widget-tracker') as HelpWidgetTrackerModule & LazyModule<HelpWidgetTrackerModule>;
     const resolved = typeof mod.__lazyLoad === 'function' ? await mod.__lazyLoad() : mod;
-    const customSelector = this.#p?.help_widget_selector?.trim();
+    const sel = this.#p?.help_widget_selector?.trim();
     this.#hw = new resolved.HelpWidgetTracker(
       this.#b,
       this.#c.userId || this.#c.sessionId || '',
       this.#c.sessionId || '',
       () => this.#consent,
-      () => this.#helpWidgetTrackingEnabled(),
+      () => this.#p?.help_widget_tracking_enabled === true,
       () => this.#identityMeta(),
-      customSelector ? [customSelector] : undefined,
+      sel ? [sel] : undefined,
     );
-    if (this.#a.size > 0) {
-      const lastVariant = [...this.#a.values()].pop();
-      if (lastVariant) this.#hw.setVariantId(lastVariant.id);
-    }
+    this.#attachActiveVariant(this.#hw);
     this.#hw.start();
+  }
+
+  #attachActiveVariant(tracker: { setVariantId(v: string): void } | null): void {
+    if (!tracker || !this.#a.size) return;
+    const variant = [...this.#a.values()].pop();
+    if (variant) tracker.setVariantId(variant.id);
   }
 
   #pk(): string { return this.#c.projectKey || ''; }
   #apiHost(): string { return this.#c.apiHost || DEFAULT_API_HOST; }
-
-  #helpWidgetTrackingEnabled(): boolean {
-    return (
-      this.#p?.session_analysis_enabled !== false &&
-      this.#p?.help_widget_tracking_enabled === true
-    );
-  }
 
   #revokeServerTrackingCap(): void {
     this.#trackingSampledEffective = false;
@@ -780,11 +769,9 @@ export class GrowthRoadmaps {
     this.#ht?.setSessionSampled(true);
     this.#ft?.setSessionSampled(true);
     if (this.#p?.session_analysis_enabled !== false && !this.#st) void this.#initSessionTracker();
-    if (this.#p?.session_analysis_enabled !== false && this.#c.modalTracking !== false && !this.#mt) {
-      void this.#initModalTracker();
-    }
-    if (this.#helpWidgetTrackingEnabled() && !this.#hw) {
-      void this.#initHelpWidgetTracker();
+    if (this.#p?.session_analysis_enabled !== false) {
+      if (this.#c.modalTracking !== false && !this.#mt) void this.#initModalTracker();
+      if (this.#p?.help_widget_tracking_enabled === true && !this.#hw) void this.#initHelpWidgetTracker();
     }
   }
 
@@ -1112,12 +1099,8 @@ export class GrowthRoadmaps {
 
         if (wantsSessionAnalysis && trackingSampled) {
           void this.#initSessionTracker();
-          if (this.#c.modalTracking !== false) {
-            void this.#initModalTracker();
-          }
-          if (this.#helpWidgetTrackingEnabled()) {
-            void this.#initHelpWidgetTracker();
-          }
+          if (this.#c.modalTracking !== false) void this.#initModalTracker();
+          if (this.#p?.help_widget_tracking_enabled === true) void this.#initHelpWidgetTracker();
         }
       }
       if (!this.#pv && this.#c.surveys && this.#p?.surveys_enabled !== false) {
