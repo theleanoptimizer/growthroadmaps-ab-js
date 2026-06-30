@@ -459,7 +459,7 @@ export class GrowthRoadmaps {
         if (!c.projectKey) c.projectKey = cfg.pk;
       }
     }
-    if (!c.apiHost) c.apiHost = DEFAULT_API_HOST;
+    if (!c.apiHost || (W && c.apiHost.replace(/\/$/, '') === W.location.origin)) c.apiHost = DEFAULT_API_HOST;
     this.#c = c;
     this.#b = new EventBatcher(c.apiHost, c.projectKey || '', this.#debug, (sa) => {
       const sid = this.#c.sessionId;
@@ -828,7 +828,7 @@ export class GrowthRoadmaps {
         if (grPreview) {
           try {
             const r = await fetch(
-              this.#c.apiHost + '/api/it/verify-preview?gr_preview=' + encodeURIComponent(grPreview)
+              this.#apiHost() + '/api/it/verify-preview?gr_preview=' + encodeURIComponent(grPreview)
             );
             if (r.ok) {
               const d = await r.json();
@@ -860,7 +860,7 @@ export class GrowthRoadmaps {
               if (t === 'panel') {
                 try { sessionStorage.setItem('_ab_panel_key', panelKey); sessionStorage.setItem('_ab_panel_pk', pk); } catch {}
               }
-              const r = await fetch(this.#c.apiHost + '/api/ab/preview/panel?pk=' + encodeURIComponent(pk) + '&key=' + encodeURIComponent(panelKey));
+              const r = await fetch(this.#apiHost() + '/api/ab/preview/panel?pk=' + encodeURIComponent(pk) + '&key=' + encodeURIComponent(panelKey));
               if (r.ok) {
                 const panelConfig = await r.json();
                 this.#pv = true;
@@ -891,11 +891,14 @@ export class GrowthRoadmaps {
               }
             } catch {}
           }
+          this.#pv = true;
+          revealPage();
+          return;
         }
 
         if (t && t !== 'panel') {
           try {
-            const r = await fetch(this.#c.apiHost + '/api/ab/preview/' + encodeURIComponent(t));
+            const r = await fetch(this.#apiHost() + '/api/ab/preview/' + encodeURIComponent(t));
             if (r.ok) {
               const d = await r.json();
               this.#pv = true;
@@ -905,10 +908,11 @@ export class GrowthRoadmaps {
               revealPage();
               return;
             }
-            console.warn('[GR] Preview token rejected (status ' + r.status + ')');
-          } catch {
-            console.warn('[GR] Preview fetch failed');
-          }
+          } catch {}
+          console.warn('[GR] Preview failed');
+          this.#pv = true;
+          revealPage();
+          return;
         }
       }
       const pk = this.#pk();
@@ -920,7 +924,7 @@ export class GrowthRoadmaps {
         const headers: Record<string, string> = {};
         if (storedEtag) headers['If-None-Match'] = storedEtag;
         const cdnUrl = 'https://js.growthroadmaps.com/configs/' + encodeURIComponent(pk) + '.json';
-        const fallbackUrl = this.#c.apiHost + '/api/ab/experiments/all-configs?pk=' + encodeURIComponent(pk);
+        const fallbackUrl = this.#apiHost() + '/api/ab/experiments/all-configs?pk=' + encodeURIComponent(pk);
         let r: Response | null = null;
         try {
           const cdnR = await fetch(cdnUrl, { headers });
