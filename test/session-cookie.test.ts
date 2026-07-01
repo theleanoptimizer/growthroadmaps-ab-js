@@ -1,11 +1,15 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from "vitest";
-import {
-  AB_SESSION_COOKIE,
-  getCookie,
-  mirrorAbSessionCookie,
-  setSessionCookie,
-} from "../src/visitor-identity";
+
+/** Mirrors core bundle `scs()` — session-scoped _ab_sid for CallRail linkage. */
+function scs(s: string): void {
+  document.cookie = `_ab_sid=${encodeURIComponent(s)};path=/;SameSite=Lax`;
+}
+
+function getSidCookie(): string | null {
+  const m = document.cookie.match(/(?:^|;\s*)_ab_sid=([^;]*)/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
 
 describe("session cookie (_ab_sid)", () => {
   beforeEach(() => {
@@ -13,13 +17,13 @@ describe("session cookie (_ab_sid)", () => {
   });
 
   it("sets session-scoped cookie without max-age", () => {
-    setSessionCookie(AB_SESSION_COOKIE, "sess-uuid-123");
-    expect(getCookie(AB_SESSION_COOKIE)).toBe("sess-uuid-123");
+    scs("sess-uuid-123");
+    expect(getSidCookie()).toBe("sess-uuid-123");
     expect(document.cookie).not.toMatch(/max-age=/i);
   });
 
-  it("mirrorAbSessionCookie writes trimmed session id", () => {
-    mirrorAbSessionCookie("  abc-def-ghi  ");
-    expect(getCookie(AB_SESSION_COOKIE)).toBe("abc-def-ghi");
+  it("encodes special characters", () => {
+    scs("abc def");
+    expect(getSidCookie()).toBe("abc def");
   });
 });

@@ -19,7 +19,6 @@ import {
   refreshVisitorSessionActivity,
   getBrowserOsLanguage,
   setCookie,
-  mirrorAbSessionCookie,
   type VisitorType,
 } from './visitor-identity';
 
@@ -118,12 +117,30 @@ function uuid(): string {
 
 function gc(n: string): string | null {
   if (!D) return null;
-  const m = D.cookie.match(new RegExp('(?:^|;\\s*)' + n + '=([^;]*)'));
+  const m = D.cookie.match(new RegExp('(?:^|;\\s*)' + n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '=([^;]*)'));
   return m ? decodeURIComponent(m[1]) : null;
 }
 
 function sc(id: string): void {
   if (D) D.cookie = `_ab_vid=${encodeURIComponent(id)};path=/;max-age=31536000;SameSite=Lax`;
+}
+
+function readCallRailSid(): string | undefined {
+  if (W) {
+    const g = (W as { CallTrkSwap?: { _session_id?: string } }).CallTrkSwap?._session_id;
+    if (typeof g === 'string' && g.trim()) return g.trim().slice(0, 128);
+  }
+  let v = gc('calltrk_session_id');
+  if (v) return v.slice(0, 128);
+  if (!D?.cookie) return undefined;
+  for (const part of D.cookie.split(';')) {
+    const p = part.trim();
+    if (p.startsWith('calltrk_session_id_')) {
+      v = decodeURIComponent(p.slice(p.indexOf('=') + 1)).trim();
+      if (v) return v.slice(0, 128);
+    }
+  }
+  return undefined;
 }
 
 function syncExpCookie(assignments: Map<string, Variant>, experiments: ExperimentConfig[]): void {
@@ -423,10 +440,13 @@ export class GrowthRoadmaps {
   #browser = 'unknown';
   #os = 'unknown';
   #language = 'unknown';
+  #callrailSessionUuid = '';
+  #callrailCaptureEnabled = true;
 
   constructor(c: GrowthConfig) {
     this.#consentRequired = c.cookieConsent === 'required';
     this.#consent = !this.#consentRequired;
+    this.#callrailCaptureEnabled = c.captureCallRailSession !== false;
     if (W) {
       const sp = new URLSearchParams(W.location.search);
       const dp = sp.get('_ab_debug');
@@ -451,19 +471,15 @@ export class GrowthRoadmaps {
     if (!c.sessionId) {
       try {
         let sid = sessionStorage.getItem('_ab_sid');
-        if (!sid) {
-          sid = uuid();
-          if (this.#consent) sessionStorage.setItem('_ab_sid', sid);
-        }
+        if (!sid) sid = uuid();
         c.sessionId = sid;
-        if (this.#consent && sid) mirrorAbSessionCookie(sid);
       } catch {
         c.sessionId = uuid();
-        if (this.#consent && c.sessionId) mirrorAbSessionCookie(c.sessionId);
       }
-    } else if (this.#consent && c.sessionId) {
-      mirrorAbSessionCookie(c.sessionId);
     }
+    this.#persistSid();
+    this.#captureCallRailSession();
+    this.#scheduleCallRailRetries();
     if (W && W.__gr_loader_ran) {
       const cfg = W.__gr_loader_cfg;
       if (cfg) {
@@ -782,16 +798,35 @@ export class GrowthRoadmaps {
 
   #identityMeta(): Record<string, unknown> {
     refreshVisitorSessionActivity(this.#pk(), this.#visitorSessionId, this.#consent);
-    return {
+    const meta: Record<string, unknown> = {
       visitor_type: this.#visitorType,
       visitor_session_id: this.#visitorSessionId,
       browser: this.#browser,
       os: this.#os,
       language: this.#language,
     };
+    if (this.#callrailSessionUuid) meta.callrail_session_uuid = this.#callrailSessionUuid;
+    return meta;
   }
   #saveFiredGoals(): void { try { sessionStorage.setItem('_ab_fg_' + this.#pk(), JSON.stringify([...this.#fg])); } catch {} }
   #uid(): string | undefined { return this.#c.userId || this.#c.sessionId; }
+  #persistSid(): void {
+    if (!this.#consent) return;
+    const s = this.#c.sessionId;
+    if (!s) return;
+    try { sessionStorage.setItem('_ab_sid', s); } catch {}
+    if (D) D.cookie = `_ab_sid=${encodeURIComponent(s)};path=/;SameSite=Lax`;
+  }
+  #captureCallRailSession(): void {
+    if (!this.#callrailCaptureEnabled) return;
+    const id = readCallRailSid();
+    if (id) this.#callrailSessionUuid = id;
+  }
+  #scheduleCallRailRetries(): void {
+    if (!this.#callrailCaptureEnabled || !W) return;
+    W.setTimeout(() => this.#captureCallRailSession(), 2000);
+    W.setTimeout(() => this.#captureCallRailSession(), 10000);
+  }
   #isPanelSession(): boolean { return isPanelPreviewSession(this.#pk()); }
   #getPanelKey(): string | null { try { return sessionStorage.getItem('_ab_panel_pk') === this.#pk() ? sessionStorage.getItem('_ab_panel_key') : null; } catch { return null; } }
   #clearPanelAssets(): void {
@@ -1134,12 +1169,8 @@ export class GrowthRoadmaps {
       const existing = gc('_ab_vid');
       if (!existing) sc(u);
     }
-    if (this.#c.sessionId) {
-      try {
-        if (!sessionStorage.getItem('_ab_sid')) sessionStorage.setItem('_ab_sid', this.#c.sessionId);
-      } catch {}
-      mirrorAbSessionCookie(this.#c.sessionId);
-    }
+    if (this.#c.sessionId) this.#persistSid();
+    this.#captureCallRailSession();
     this.#b.start();
     for (const e of this.#pendingEvents) this.#b.push(e);
     this.#pendingEvents = [];
@@ -1477,12 +1508,7 @@ export class GrowthRoadmaps {
   setSessionId(id: string | null): void {
     if (this.#c) this.#c.sessionId = id || undefined;
     if (this.#sv) this.#sv.setSessionId(id);
-    if (this.#consent && id) {
-      try {
-        sessionStorage.setItem('_ab_sid', id);
-      } catch {}
-      mirrorAbSessionCookie(id);
-    }
+    this.#persistSid();
   }
 
   setAttribute(key: string, value: string | number | boolean): void {

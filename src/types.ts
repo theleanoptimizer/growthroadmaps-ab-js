@@ -159,6 +159,8 @@ export interface GrowthConfig {
   mutationObserver?: boolean;
   /** Track multi-step modal/dialog flows for session analysis (default: true when session analysis is on). */
   modalTracking?: boolean;
+  /** Read CallRail session UUID for call VoC linkage (default: true). */
+  captureCallRailSession?: boolean;
 }
 
 export interface SurveyConfig {

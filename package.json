@@ -1,6 +1,6 @@
 {
   "name": "@growthroadmaps/js",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "GrowthRoadmaps client-side JavaScript SDK — A/B testing, heatmaps, and surveys",
   "main": "dist/growth.umd.js",
   "module": "dist/growth.esm.js",
