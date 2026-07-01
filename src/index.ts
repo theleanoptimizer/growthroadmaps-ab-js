@@ -18,7 +18,10 @@ import {
   touchVisitorSession,
   refreshVisitorSessionActivity,
   getBrowserOsLanguage,
+  getCookie,
   setCookie,
+  setAbVidCookie,
+  uuid,
   type VisitorType,
 } from './visitor-identity';
 
@@ -107,30 +110,10 @@ function ensureDataLayer(): void {
   W.dataLayer = W.dataLayer || [];
 }
 
-function uuid(): string {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-    const r = (Math.random() * 16) | 0;
-    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
-  });
-}
-
-function gc(n: string): string | null {
-  if (!D) return null;
-  const m = D.cookie.match(new RegExp('(?:^|;\\s*)' + n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '=([^;]*)'));
-  return m ? decodeURIComponent(m[1]) : null;
-}
-
-function sc(id: string): void {
-  if (D) D.cookie = `_ab_vid=${encodeURIComponent(id)};path=/;max-age=31536000;SameSite=Lax`;
-}
-
 function readCallRailSid(): string | undefined {
-  if (W) {
-    const g = (W as { CallTrkSwap?: { _session_id?: string } }).CallTrkSwap?._session_id;
-    if (typeof g === 'string' && g.trim()) return g.trim().slice(0, 128);
-  }
-  let v = gc('calltrk_session_id');
+  const g = (W as { CallTrkSwap?: { _session_id?: string } } | undefined)?.CallTrkSwap?._session_id;
+  if (typeof g === 'string' && g.trim()) return g.trim().slice(0, 128);
+  let v = getCookie('calltrk_session_id');
   if (v) return v.slice(0, 128);
   if (!D?.cookie) return undefined;
   for (const part of D.cookie.split(';')) {
@@ -153,16 +136,6 @@ function syncExpCookie(assignments: Map<string, Variant>, experiments: Experimen
     }
   }
   D.cookie = `_ab_exp=${encodeURIComponent(labels.join(','))};path=/;max-age=31536000;SameSite=Lax`;
-}
-
-function vid(skipCookie?: boolean): string {
-  if (!skipCookie) {
-    const v = gc('_ab_vid');
-    if (v) return v;
-  }
-  const id = uuid();
-  if (!skipCookie) sc(id);
-  return id;
 }
 
 interface SavedAssignment { variantId: string; css?: string; external_css?: string[]; external_js?: string[]; exposedAt?: number; redirect_url?: string; is_control?: boolean; }
@@ -283,7 +256,7 @@ function evalRule(r: TargetingRule, _k: string, a?: Record<string, string>): boo
     case 'language': return eop(r.operator, N?.language || '', r.value);
     case 'country': return eop(r.operator, a?.['country'], r.value);
     case 'query_param': return kvop(r.operator, r.value, k => W ? new URLSearchParams(W.location.search).get(k) : null);
-    case 'cookie': return kvop(r.operator, r.value, gc);
+    case 'cookie': return kvop(r.operator, r.value, getCookie);
     case 'custom': return kvop(r.operator, r.value, k => a?.[k] ?? null);
     default: return true;
   }
@@ -458,7 +431,7 @@ export class GrowthRoadmaps {
       const { userId, visitorType } = resolveVisitorIdentity(this.#consentRequired);
       c.userId = userId;
       this.#visitorType = visitorType;
-    } else if (c.userId && D && gc('_ab_vid')) {
+    } else if (c.userId && D && getCookie('_ab_vid')) {
       this.#visitorType = 'returning';
       if (this.#consent) setCookie('returning', '1');
     }
@@ -824,8 +797,7 @@ export class GrowthRoadmaps {
   }
   #scheduleCallRailRetries(): void {
     if (!this.#callrailCaptureEnabled || !W) return;
-    W.setTimeout(() => this.#captureCallRailSession(), 2000);
-    W.setTimeout(() => this.#captureCallRailSession(), 10000);
+    for (const ms of [2000, 10000]) W.setTimeout(() => this.#captureCallRailSession(), ms);
   }
   #isPanelSession(): boolean { return isPanelPreviewSession(this.#pk()); }
   #getPanelKey(): string | null { try { return sessionStorage.getItem('_ab_panel_pk') === this.#pk() ? sessionStorage.getItem('_ab_panel_key') : null; } catch { return null; } }
@@ -1010,10 +982,7 @@ export class GrowthRoadmaps {
           r = await fetch(fallbackUrl, { headers });
         }
         if (r.status === 404) {
-          console.warn(
-            '[GR] No config found for project key "' + pk + '". ' +
-            'Use the project ID from Growth Roadmaps install settings (not team ID).',
-          );
+          console.warn('[GR] No config for pk:', pk);
           throw 0;
         }
         if (r.status === 304) {
@@ -1036,10 +1005,7 @@ export class GrowthRoadmaps {
           if (d.project) {
             this.#p = d.project;
             if (d.project.id && d.project.id !== pk) {
-              console.warn(
-                '[GR] Config project id "' + d.project.id + '" does not match snippet pk "' + pk + '". ' +
-                'Update your install snippet to use the correct project ID.',
-              );
+              console.warn('[GR] Config pk mismatch:', d.project.id, pk);
             }
           }
           if (d.experiments) this.#e = Object.values(d.experiments) as ExperimentConfig[];
@@ -1181,8 +1147,8 @@ export class GrowthRoadmaps {
     this.#consent = true;
     const u = this.#uid();
     if (u) {
-      const existing = gc('_ab_vid');
-      if (!existing) sc(u);
+      const existing = getCookie('_ab_vid');
+      if (!existing) setAbVidCookie(u);
     }
     if (this.#c.sessionId) this.#persistSid();
     this.#captureCallRailSession();
