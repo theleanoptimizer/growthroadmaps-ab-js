@@ -477,7 +477,6 @@ export class GrowthRoadmaps {
         c.sessionId = uuid();
       }
     }
-    this.#persistSid();
     this.#captureCallRailSession();
     this.#scheduleCallRailRetries();
     if (W && W.__gr_loader_ran) {
@@ -492,6 +491,7 @@ export class GrowthRoadmaps {
     }
     if (!c.apiHost) c.apiHost = DEFAULT_API_HOST;
     this.#c = c;
+    this.#persistSid();
     this.#b = new EventBatcher(c.apiHost, c.projectKey || '', this.#debug, (sa) => {
       const sid = this.#c.sessionId;
       if (sid && sa[sid] === false) this.#revokeServerTrackingCap();
@@ -1009,6 +1009,13 @@ export class GrowthRoadmaps {
         } catch {
           r = await fetch(fallbackUrl, { headers });
         }
+        if (r.status === 404) {
+          console.warn(
+            '[GR] No config found for project key "' + pk + '". ' +
+            'Use the project ID from Growth Roadmaps install settings (not team ID).',
+          );
+          throw 0;
+        }
         if (r.status === 304) {
           // Server confirms config is unchanged — refresh the local timestamp.
           if (!useCached && cc) {
@@ -1026,7 +1033,15 @@ export class GrowthRoadmaps {
             if (!apiR.ok) throw 0;
             d = await apiR.json();
           }
-          if (d.project) this.#p = d.project;
+          if (d.project) {
+            this.#p = d.project;
+            if (d.project.id && d.project.id !== pk) {
+              console.warn(
+                '[GR] Config project id "' + d.project.id + '" does not match snippet pk "' + pk + '". ' +
+                'Update your install snippet to use the correct project ID.',
+              );
+            }
+          }
           if (d.experiments) this.#e = Object.values(d.experiments) as ExperimentConfig[];
           else this.#e = Array.isArray(d) ? d : Object.values(d);
           if (d.heatmapConfigs) this.#hc = d.heatmapConfigs;

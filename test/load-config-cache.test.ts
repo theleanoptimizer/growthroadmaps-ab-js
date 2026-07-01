@@ -27,7 +27,7 @@ function makeExp(id: string, name: string): ExperimentConfig {
 
 function makeConfigResponse(experiments: ExperimentConfig[], extra?: Partial<CachedConfig>): object {
   return {
-    project: { id: 'p1', domain: 'example.com' },
+    project: { id: PROJECT_KEY, domain: 'example.com' },
     experiments: Object.fromEntries(experiments.map(e => [e.id, e])),
     heatmapConfigs: [],
     formAnalyticsConfigs: [],
@@ -37,10 +37,14 @@ function makeConfigResponse(experiments: ExperimentConfig[], extra?: Partial<Cac
   };
 }
 
+function makeStaleCachedProject() {
+  return { id: PROJECT_KEY, domain: 'example.com' };
+}
+
 function seedStaleCache(experiments: ExperimentConfig[]): void {
   const cached: CachedConfig = {
     experiments,
-    project: { id: 'p1', domain: 'example.com' },
+    project: makeStaleCachedProject(),
     heatmapConfigs: [],
     formAnalyticsConfigs: [],
     audiences: [],
@@ -312,6 +316,44 @@ describe('loadConfig cache behaviour', () => {
       const result = getCachedConfig(PROJECT_KEY);
       expect(result).not.toBeNull();
       expect(result!.experiments.map(e => e.id)).toContain('mem-live-001');
+    });
+
+    it('warns when config is missing for the project key (404)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      mockFetch(() => new Response('Not found', { status: 404 }));
+
+      const sdk = track(new GrowthRoadmaps({ projectKey: PROJECT_KEY, apiHost: API_HOST }));
+      await sdk.init();
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('No config found for project key'),
+      );
+      warn.mockRestore();
+    });
+
+    it('warns when config.project.id does not match snippet pk', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      mockFetch(url => {
+        if (url === CDN_URL || url.includes('all-configs')) {
+          return new Response(
+            JSON.stringify(makeConfigResponse([makeExp('exp-1', 'Test')], {
+              project: { id: 'different-project-id', domain: 'example.com' },
+            })),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        return new Response('{}', { status: 200 });
+      });
+
+      const sdk = track(new GrowthRoadmaps({ projectKey: PROJECT_KEY, apiHost: API_HOST }));
+      await sdk.init();
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('does not match snippet pk'),
+      );
+      warn.mockRestore();
     });
   });
 });
