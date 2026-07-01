@@ -184,6 +184,7 @@ export interface ProjectInfo {
   help_widget_tracking_enabled?: boolean;
   help_widget_selector?: string | null;
   tracking_sampling_rate?: number;
+  tracking_authorized_domains?: string[];
 }
 
 export interface AudienceAttributeConfig {

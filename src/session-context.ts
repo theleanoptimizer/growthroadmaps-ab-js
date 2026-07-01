@@ -28,6 +28,11 @@ export function getCurrentPagePath(): string {
   return cachedPagePath;
 }
 
+export function getPageHost(): string {
+  if (typeof window === 'undefined') return '';
+  return window.location.hostname.replace(/^www\./, '').toLowerCase();
+}
+
 export function setCurrentPagePath(url?: string): void {
   if (typeof window === 'undefined') return;
   cachedPagePath = pathOnly(url ?? window.location.href);

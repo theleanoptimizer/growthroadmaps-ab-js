@@ -84,7 +84,12 @@ async function fetchPreservedConfigHashesFromCloudflare() {
 
 async function fetchProjectKeysFromApi() {
   try {
-    const res = await fetch(CONFIG_KEYS_API, { headers: { Accept: "application/json" } });
+    const token = process.env.SDK_CONFIG_KEYS_TOKEN?.trim();
+    const headers = {
+      Accept: "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
+    const res = await fetch(CONFIG_KEYS_API, { headers });
     if (!res.ok) {
       console.warn(`[stage-configs] config-keys API failed (${res.status})`);
       return [];

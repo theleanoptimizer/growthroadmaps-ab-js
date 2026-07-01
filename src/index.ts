@@ -12,6 +12,8 @@ import {
   GrowthCommand,
 } from './types';
 import { DEFAULT_API_HOST } from './constants';
+import { isCurrentHostnameAuthorized } from './domain-guard';
+import { getPageHost } from './session-context';
 import { assignVariant, fnv1a } from './hasher';
 import {
   resolveVisitorIdentity,
@@ -777,6 +779,7 @@ export class GrowthRoadmaps {
       browser: this.#browser,
       os: this.#os,
       language: this.#language,
+      page_host: getPageHost(),
     };
     if (this.#callrailSessionUuid) meta.callrail_session_uuid = this.#callrailSessionUuid;
     return meta;
@@ -1072,6 +1075,10 @@ export class GrowthRoadmaps {
         } catch (err) { this.#dbg('Goals chunk load failed:', err); }
       }
       if (!this.#pv && this.#c.heatmaps && this.#p?.heatmaps_enabled !== false) {
+        const trackingHostnameOk = isCurrentHostnameAuthorized(this.#p);
+        if (!trackingHostnameOk) {
+          this.#dbg('Behavioral tracking disabled: hostname not authorized for project domain');
+        }
         const hasAllPages = this.#p?.heatmap_all_pages_enabled === true;
         const hasAllForms = this.#p?.form_analytics_all_forms_enabled === true;
         const ruleSets = this.#hc.map(c => c.url_rules || []);
@@ -1105,11 +1112,11 @@ export class GrowthRoadmaps {
         }
         this.#trackingSampledEffective = trackingSampled;
 
-        if (wantsHeatmap) {
+        if (wantsHeatmap && trackingHostnameOk) {
           void this.#initHeatmap(ruleSets, hasAllPages, effectiveSamplingRate, trackingSampled);
         }
 
-        if (this.#fac.length > 0 || hasAllForms) {
+        if (trackingHostnameOk && (this.#fac.length > 0 || hasAllForms)) {
           const formConfigs: Array<{ capture_mode: string; url_rules: Array<{ match_type: string; value: string }>; form_selectors: string[] }> = [];
           if (hasAllForms) {
             formConfigs.push({ capture_mode: 'all_forms', url_rules: [], form_selectors: [] });
@@ -1118,7 +1125,7 @@ export class GrowthRoadmaps {
           void this.#initFormTracker(formConfigs, trackingSampled);
         }
 
-        if (wantsSessionAnalysis && trackingSampled) {
+        if (trackingHostnameOk && wantsSessionAnalysis && trackingSampled) {
           void this.#initSessionTracker();
           if (this.#c.modalTracking !== false) void this.#initModalTracker();
           if (this.#p?.help_widget_tracking_enabled === true) void this.#initHelpWidgetTracker();
