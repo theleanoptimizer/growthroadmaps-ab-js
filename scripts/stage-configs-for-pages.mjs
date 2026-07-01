@@ -5,11 +5,15 @@
  * were wiping /configs/*.json published by the main app. This script copies
  * existing configs into dist/configs/ so SDK deploys keep them.
  *
- * Config paths come from recent Cloudflare Pages deployments (hash manifest).
- * File bodies are downloaded from growthroadmaps.com (source of truth).
+ * Discovery order:
+ *   1. Recent Cloudflare Pages deployment manifests (needs CF env vars)
+ *   2. Fallback: GET growthroadmaps.com/api/sdk/config-keys.json
+ *
+ * File bodies are downloaded from growthroadmaps.com/api/sdk/config/ (auto-generates
+ * from DB when missing). CDN is used as a secondary source.
  *
  * Optional Cloudflare Pages build env vars:
- *   CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN 
+ *   CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN
  */
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -22,6 +26,7 @@ const CONFIG_OUT_DIR = join(DIST_DIR, "configs");
 
 const PAGES_PROJECT_NAME = "growthroadmaps-ab-js";
 const CONFIG_API_BASE = "https://growthroadmaps.com/api/sdk/config/";
+const CONFIG_KEYS_API = "https://growthroadmaps.com/api/sdk/config-keys.json";
 const CONFIG_CDN_BASE = "https://js.growthroadmaps.com/configs/";
 const FETCH_CONCURRENCY = 4;
 
@@ -41,7 +46,7 @@ async function fetchPreservedConfigHashesFromCloudflare() {
   const apiToken = process.env.CLOUDFLARE_API_TOKEN;
   if (!accountId || !apiToken) {
     console.warn(
-      "[stage-configs] CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN not set — skipping config staging",
+      "[stage-configs] CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN not set — manifest discovery skipped",
     );
     return {};
   }
@@ -75,6 +80,21 @@ async function fetchPreservedConfigHashesFromCloudflare() {
   }
 
   return {};
+}
+
+async function fetchProjectKeysFromApi() {
+  try {
+    const res = await fetch(CONFIG_KEYS_API, { headers: { Accept: "application/json" } });
+    if (!res.ok) {
+      console.warn(`[stage-configs] config-keys API failed (${res.status})`);
+      return [];
+    }
+    const data = await res.json();
+    return Array.isArray(data.keys) ? data.keys : [];
+  } catch (err) {
+    console.warn("[stage-configs] Could not fetch config keys from API:", err);
+    return [];
+  }
 }
 
 function projectKeyFromConfigPath(configPath) {
@@ -158,12 +178,25 @@ async function main() {
   }
 
   const configHashes = await fetchPreservedConfigHashesFromCloudflare();
-  const entries = Object.entries(configHashes);
+  let entries = Object.entries(configHashes);
+  let discoverySource = "cloudflare-manifest";
+
   if (entries.length === 0) {
     console.warn(
-      "[stage-configs] No /configs/*.json hashes found in recent deployments — SDK build will not include configs",
+      "[stage-configs] No /configs/*.json hashes in recent CF deployments — falling back to config-keys API",
     );
-    return;
+    const keys = await fetchProjectKeysFromApi();
+    if (keys.length === 0) {
+      console.warn("[stage-configs] No project keys from API — SDK build will not include configs");
+      return;
+    }
+    entries = keys.map((key) => [`/configs/${key}.json`, null]);
+    discoverySource = "config-keys-api";
+    console.log(`[stage-configs] Discovered ${entries.length} project key(s) via config-keys API`);
+  } else {
+    console.log(
+      `[stage-configs] Discovered ${entries.length} config(s) from Cloudflare deployment manifest`,
+    );
   }
 
   await mkdir(CONFIG_OUT_DIR, { recursive: true });
@@ -179,7 +212,7 @@ async function main() {
     try {
       const payload = await downloadConfig(projectKey);
       const fullHash = createHash("sha256").update(payload).digest("hex");
-      if (manifestHash(fullHash) !== expectedHash) {
+      if (expectedHash && manifestHash(fullHash) !== expectedHash) {
         console.warn(
           `[stage-configs] Hash mismatch for ${projectKey} — staging latest API payload anyway`,
         );
@@ -200,7 +233,7 @@ async function main() {
   });
 
   console.log(
-    `[stage-configs] Staged ${staged} config file(s) into dist/configs/ (${skipped} skipped, ${failed} failed, ${entries.length} in manifest)`,
+    `[stage-configs] Staged ${staged} config file(s) into dist/configs/ via ${discoverySource} (${skipped} skipped, ${failed} failed, ${entries.length} total)`,
   );
 
   if (failed > 0) {

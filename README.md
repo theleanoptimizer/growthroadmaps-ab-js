@@ -8,14 +8,19 @@ Include the SDK via a script tag or install as an ES module.
 
 ### Cloudflare Pages (`js.growthroadmaps.com`)
 
-The `growthroadmaps-ab-js` repo is deployed by Cloudflare Pages on every push. The build runs `npm run build`, which also runs `scripts/stage-configs-for-pages.mjs` to copy existing `/configs/*.json` files into `dist/configs/` so SDK deploys do not remove configs published by the main app.
+The `growthroadmaps-ab-js` repo is deployed by Cloudflare Pages on every push. The build runs `npm run build`, which also runs `scripts/stage-configs-for-pages.mjs` to copy `/configs/*.json` files into `dist/configs/` so SDK deploys do not remove configs published by the main app.
 
-Set these **Cloudflare Pages environment variables** (production) so the post-build step can read the current config manifest:
+**Config discovery** (in order):
+
+1. Recent Cloudflare Pages deployment manifests — requires CF env vars below
+2. Fallback: `GET https://growthroadmaps.com/api/sdk/config-keys.json` lists all project keys; each config is then fetched from the API (which auto-generates from the database when missing)
+
+Set these **Cloudflare Pages environment variables** (production) so the post-build step can read the current config manifest from prior deployments:
 
 - `CLOUDFLARE_ACCOUNT_ID`
-- `CLOUDFLARE_API_TOKEN` (Pages write access for the account)
+- `CLOUDFLARE_API_TOKEN` (Pages read access for the account)
 
-Config file bodies are fetched from `https://growthroadmaps.com/api/sdk/config/{projectKey}.json`. Local builds skip staging when those vars are unset, or when `SKIP_CONFIG_STAGING=1`.
+Config file bodies are fetched from `https://growthroadmaps.com/api/sdk/config/{projectKey}.json`. The config-keys fallback works without CF env vars. Local builds skip staging when `SKIP_CONFIG_STAGING=1`.
 
 ## Usage
 
