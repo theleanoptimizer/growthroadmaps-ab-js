@@ -22,6 +22,7 @@ const CONFIG_OUT_DIR = join(DIST_DIR, "configs");
 
 const PAGES_PROJECT_NAME = "growthroadmaps-ab-js";
 const CONFIG_API_BASE = "https://growthroadmaps.com/api/sdk/config/";
+const CONFIG_CDN_BASE = "https://js.growthroadmaps.com/configs/";
 const FETCH_CONCURRENCY = 4;
 
 function manifestHash(fullHash) {
@@ -81,13 +82,56 @@ function projectKeyFromConfigPath(configPath) {
   return decodeURIComponent(name);
 }
 
-async function downloadConfig(projectKey) {
-  const url = `${CONFIG_API_BASE}${encodeURIComponent(projectKey)}.json`;
+class ConfigDownloadError extends Error {
+  constructor(message, { status, unavailable } = {}) {
+    super(message);
+    this.name = "ConfigDownloadError";
+    this.status = status;
+    this.unavailable = unavailable;
+  }
+}
+
+async function fetchConfigText(url) {
   const res = await fetch(url, { headers: { Accept: "application/json" } });
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`);
+    throw new ConfigDownloadError(`HTTP ${res.status}`, { status: res.status });
   }
   return res.text();
+}
+
+/** Prefer live API config; fall back to CDN copy from the previous Pages deploy. */
+async function downloadConfig(projectKey) {
+  const encodedKey = encodeURIComponent(projectKey);
+  const sources = [
+    `${CONFIG_API_BASE}${encodedKey}.json`,
+    `${CONFIG_CDN_BASE}${encodedKey}.json`,
+  ];
+
+  const errors = [];
+  for (const url of sources) {
+    try {
+      return await fetchConfigText(url);
+    } catch (err) {
+      errors.push(err);
+    }
+  }
+
+  const statuses = errors
+    .filter((err) => err instanceof ConfigDownloadError && err.status != null)
+    .map((err) => err.status);
+  const allSourcesUnavailable =
+    statuses.length === 0 ||
+    statuses.every((status) => status >= 400 && status < 500) ||
+    statuses.some((status) => status === 404 || status === 410);
+
+  if (allSourcesUnavailable) {
+    throw new ConfigDownloadError("Config unavailable on API and CDN", {
+      status: 404,
+      unavailable: true,
+    });
+  }
+
+  throw errors[0] ?? new ConfigDownloadError("Config download failed");
 }
 
 async function mapWithConcurrency(items, concurrency, fn) {
@@ -125,6 +169,7 @@ async function main() {
   await mkdir(CONFIG_OUT_DIR, { recursive: true });
 
   let staged = 0;
+  let skipped = 0;
   let failed = 0;
 
   await mapWithConcurrency(entries, FETCH_CONCURRENCY, async ([configPath, expectedHash]) => {
@@ -142,17 +187,28 @@ async function main() {
       await writeFile(outPath, payload, "utf8");
       staged++;
     } catch (err) {
+      if (err instanceof ConfigDownloadError && err.unavailable) {
+        skipped++;
+        console.warn(
+          `[stage-configs] Skipping ${projectKey}: config unavailable on API and CDN`,
+        );
+        return;
+      }
       failed++;
       console.warn(`[stage-configs] Failed to stage ${projectKey}:`, err);
     }
   });
 
   console.log(
-    `[stage-configs] Staged ${staged} config file(s) into dist/configs/ (${failed} failed, ${entries.length} in manifest)`,
+    `[stage-configs] Staged ${staged} config file(s) into dist/configs/ (${skipped} skipped, ${failed} failed, ${entries.length} in manifest)`,
   );
 
-  if (staged === 0 && entries.length > 0) {
+  if (failed > 0) {
     process.exitCode = 1;
+  } else if (skipped > 0 && staged === 0) {
+    console.warn(
+      "[stage-configs] No configs could be preserved — continuing SDK deploy without /configs/",
+    );
   }
 }
 
