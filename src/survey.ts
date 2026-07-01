@@ -2,7 +2,14 @@ import { SurveyData, SurveyTrigger, ExperimentAttachment } from './types';
 import { shouldShowToUser, matchTrigger, surveyHasPageUrlTrigger, surveyPageUrlMatches } from './survey-trigger';
 
 interface SurveyWidgetModule {
-  renderSurveyWidget: (survey: SurveyData, apiHost: string, userId: string | null, teamId: string, shown: Set<string>) => void;
+  renderSurveyWidget: (
+    survey: SurveyData,
+    apiHost: string,
+    userId: string | null,
+    teamId: string,
+    shown: Set<string>,
+    sessionId?: string | null,
+  ) => void;
   removePageUrlWidgets: () => void;
   __lazyLoad?: () => Promise<SurveyWidgetModule>;
 }
@@ -18,6 +25,7 @@ export class SurveyManager {
   #teamId: string;
   #userId: string | null = null;
   #configUserId: string | null = null;
+  #sessionId: string | null = null;
   #attrs: Record<string, string> = {};
   #surveys: SurveyData[] = [];
   #shown = new Set<string>();
@@ -25,10 +33,17 @@ export class SurveyManager {
   #getAssignments: GetAssignments | null = null;
   #routeChangeListeners: Array<() => void> = [];
 
-  constructor(apiHost: string, teamId: string, configUserId?: string, getAssignments?: GetAssignments) {
+  constructor(
+    apiHost: string,
+    teamId: string,
+    configUserId?: string,
+    getAssignments?: GetAssignments,
+    sessionId?: string | null,
+  ) {
     this.#apiHost = apiHost;
     this.#teamId = teamId;
     this.#configUserId = configUserId || null;
+    this.#sessionId = sessionId || null;
     this.#getAssignments = getAssignments || null;
   }
 
@@ -132,7 +147,14 @@ export class SurveyManager {
         const info = this.#getAssignments ? this.#getAssignments().get(attachment.experimentId) : undefined;
         survey.meta = { ...(survey.meta || {}), experiment_id: attachment.experimentId, variant_id: info?.variantId || null };
       }
-      widget.renderSurveyWidget(survey, this.#apiHost, this.#userId || this.#configUserId, this.#teamId, this.#shown);
+      widget.renderSurveyWidget(
+        survey,
+        this.#apiHost,
+        this.#userId || this.#configUserId,
+        this.#teamId,
+        this.#shown,
+        this.#sessionId,
+      );
     } catch {}
   }
 
@@ -349,6 +371,7 @@ export class SurveyManager {
   }
 
   setUserId(id: string): void { this.#userId = id; }
+  setSessionId(id: string | null): void { this.#sessionId = id; }
   setAttribute(key: string, value: string): void { this.#attrs[key] = value; }
   setEmail(email: string): void { this.#attrs.email = email; }
   hasSurveys(): boolean { return this.#surveys.length > 0; }

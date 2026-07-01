@@ -217,7 +217,14 @@ function renderQuestion(q: SurveyQuestion, step: number, answers: Record<string,
   return html;
 }
 
-export function renderSurveyWidget(survey: SurveyData, apiHost: string, userId: string | null, teamId: string, shownSurveys: Set<string>): void {
+export function renderSurveyWidget(
+  survey: SurveyData,
+  apiHost: string,
+  userId: string | null,
+  teamId: string,
+  shownSurveys: Set<string>,
+  sessionId?: string | null,
+): void {
   if (shownSurveys.has(survey.id)) return;
   shownSurveys.add(survey.id);
   markSurveyShown(teamId, survey.id);
@@ -264,13 +271,23 @@ export function renderSurveyWidget(survey: SurveyData, apiHost: string, userId: 
   }
   (container.host as HTMLDivElement & { __gsCleanup?: () => void }).__gsCleanup = releaseScrollLock;
 
+  function buildSurveyMeta(extraMeta: Record<string, unknown>): Record<string, unknown> {
+    const baseMeta: Record<string, unknown> = {
+      userAgent: navigator.userAgent,
+      url: window.location.href,
+      referrer: document.referrer,
+    };
+    if (sessionId) baseMeta.session_id = sessionId;
+    if (userId) baseMeta.user_id = userId;
+    return { ...baseMeta, ...extraMeta };
+  }
+
   function submitPartialResponse(): void {
     if (Object.keys(answers).length === 0) return;
-    const baseMeta: Record<string, unknown> = { userAgent: navigator.userAgent, url: window.location.href, referrer: document.referrer };
     const extraMeta = (survey as { meta?: Record<string, unknown> }).meta || {};
     const payload: { data: Record<string, AnswerValue>; meta: Record<string, unknown>; status: string; respondentId?: string } = {
       data: answers,
-      meta: { ...baseMeta, ...extraMeta },
+      meta: buildSurveyMeta(extraMeta),
       status: 'partial'
     };
     if (userId) payload.respondentId = userId;
@@ -309,11 +326,10 @@ export function renderSurveyWidget(survey: SurveyData, apiHost: string, userId: 
   }
 
   function submitResponse(): void {
-    const baseMeta: Record<string, unknown> = { userAgent: navigator.userAgent, url: window.location.href, referrer: document.referrer };
     const extraMeta = (survey as { meta?: Record<string, unknown> }).meta || {};
     const payload: { data: Record<string, AnswerValue>; meta: Record<string, unknown>; status: string; respondentId?: string } = {
       data: answers,
-      meta: { ...baseMeta, ...extraMeta },
+      meta: buildSurveyMeta(extraMeta),
       status: 'complete'
     };
     if (userId) payload.respondentId = userId;

@@ -18,6 +18,20 @@ export function setCookie(name: string, value: string, maxAgeSec = 31536000): vo
   D.cookie = `${name}=${encodeURIComponent(value)};path=/;max-age=${maxAgeSec};SameSite=Lax`;
 }
 
+/** Session-scoped cookie (no max-age) for CallRail Custom Cookie Capture linkage. */
+export function setSessionCookie(name: string, value: string): void {
+  if (!D) return;
+  D.cookie = `${name}=${encodeURIComponent(value)};path=/;SameSite=Lax`;
+}
+
+export const AB_SESSION_COOKIE = "_ab_sid";
+
+export function mirrorAbSessionCookie(sessionId: string): void {
+  const trimmed = sessionId.trim();
+  if (!trimmed) return;
+  setSessionCookie(AB_SESSION_COOKIE, trimmed);
+}
+
 function uuid(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {

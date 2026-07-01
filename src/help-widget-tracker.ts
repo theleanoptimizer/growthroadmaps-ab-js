@@ -13,6 +13,12 @@ const HELP_SELECTORS = [
   '[aria-label*="support" i]',
 ];
 
+const HELP_SEARCH_QUERY_MAX_LEN = 120;
+
+function truncateHelpSearchQuery(raw: string): string {
+  return raw.trim().slice(0, HELP_SEARCH_QUERY_MAX_LEN);
+}
+
 export class HelpWidgetTracker {
   #batcher: EventBatcher;
   #userId: string;
@@ -88,7 +94,11 @@ export class HelpWidgetTracker {
         return;
       }
       if (target.value.trim().length >= 3) {
-        this.#push('help_widget_search', { query_length: target.value.trim().length });
+        const queryText = truncateHelpSearchQuery(target.value);
+        this.#push('help_widget_search', {
+          query_length: queryText.length,
+          query_text: queryText,
+        });
       }
     };
 

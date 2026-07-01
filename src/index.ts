@@ -19,6 +19,7 @@ import {
   refreshVisitorSessionActivity,
   getBrowserOsLanguage,
   setCookie,
+  mirrorAbSessionCookie,
   type VisitorType,
 } from './visitor-identity';
 
@@ -455,9 +456,13 @@ export class GrowthRoadmaps {
           if (this.#consent) sessionStorage.setItem('_ab_sid', sid);
         }
         c.sessionId = sid;
+        if (this.#consent && sid) mirrorAbSessionCookie(sid);
       } catch {
         c.sessionId = uuid();
+        if (this.#consent && c.sessionId) mirrorAbSessionCookie(c.sessionId);
       }
+    } else if (this.#consent && c.sessionId) {
+      mirrorAbSessionCookie(c.sessionId);
     }
     if (W && W.__gr_loader_ran) {
       const cfg = W.__gr_loader_cfg;
@@ -1133,6 +1138,7 @@ export class GrowthRoadmaps {
       try {
         if (!sessionStorage.getItem('_ab_sid')) sessionStorage.setItem('_ab_sid', this.#c.sessionId);
       } catch {}
+      mirrorAbSessionCookie(this.#c.sessionId);
     }
     this.#b.start();
     for (const e of this.#pendingEvents) this.#b.push(e);
@@ -1439,7 +1445,7 @@ export class GrowthRoadmaps {
           map.set(eid, { variantId: v.id, exposedAt: this.#exposedAt.get(eid) || null });
         }
         return map;
-      });
+      }, this.#c.sessionId || null);
       const surveyData = this.#surveyData;
       const load = () => {
         if (surveyData.length > 0) {
@@ -1466,6 +1472,17 @@ export class GrowthRoadmaps {
 
   setUserId(id: string): void {
     if (this.#sv) this.#sv.setUserId(id);
+  }
+
+  setSessionId(id: string | null): void {
+    if (this.#c) this.#c.sessionId = id || undefined;
+    if (this.#sv) this.#sv.setSessionId(id);
+    if (this.#consent && id) {
+      try {
+        sessionStorage.setItem('_ab_sid', id);
+      } catch {}
+      mirrorAbSessionCookie(id);
+    }
   }
 
   setAttribute(key: string, value: string | number | boolean): void {
