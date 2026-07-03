@@ -26,6 +26,7 @@ import {
   uuid,
   type VisitorType,
 } from './visitor-identity';
+import { syncShopifyCartAttributes } from './shopify-cart-sync';
 
 function isExperimentActive(status: string): boolean {
   return status === 'running' || status === 'rolling_out';
@@ -467,6 +468,9 @@ export class GrowthRoadmaps {
     if (!c.apiHost) c.apiHost = DEFAULT_API_HOST;
     this.#c = c;
     this.#persistSid();
+    if (c.userId && c.sessionId) {
+      syncShopifyCartAttributes(c.userId, c.sessionId);
+    }
     this.#b = new EventBatcher(c.apiHost, c.projectKey || '', this.#debug, (sa) => {
       const sid = this.#c.sessionId;
       if (sid && sa[sid] === false) this.#revokeServerTrackingCap();
