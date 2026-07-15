@@ -18,7 +18,7 @@ function urlMatch(url: string, type: string, val: string): boolean {
     default: return url.includes(val);
   }
 }
-
+ 
 export function setupAudience(ctx: AudienceContext): { cleanup: () => void; urlScan: () => void } {
   const W = typeof window !== 'undefined' ? window : undefined;
   const D = typeof document !== 'undefined' ? document : undefined;
