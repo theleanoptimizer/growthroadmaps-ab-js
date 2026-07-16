@@ -78,18 +78,69 @@ export function refreshVisitorSessionActivity(projectKey: string, visitorSession
   setCookie(key, JSON.stringify({ id: visitorSessionId, lastActivityAt: Date.now() }));
 }
 
-const BR = /\b(Chrome|Firefox|Safari|Edge|Opera|MSIE|Trident)\/?[\d.]*/i;
-const OL = /\b(Windows NT|Mac OS X|Linux|Android|iOS|iPhone OS)[\d._]*/i;
-
-function uam(re: RegExp): string {
-  const m = N?.userAgent?.match(re);
-  return m ? m[0] : 'unknown';
+function windowsNtToVersion(nt: string | undefined): string {
+  switch (nt) {
+    case '10.0': return '10/11';
+    case '6.3': return '8.1';
+    case '6.2': return '8';
+    case '6.1': return '7';
+    default: return nt ?? '';
+  }
 }
 
-export function getBrowserOsLanguage(): { browser: string; os: string; language: string } {
+/** Parse browser/OS names + versions from the current user agent. */
+export function getBrowserOsLanguage(): {
+  browser: string;
+  browserVersion: string;
+  os: string;
+  osVersion: string;
+  language: string;
+} {
+  const raw = N?.userAgent?.trim() ?? '';
+  let browser = 'unknown';
+  let browserVersion = '';
+  const browserMatchers: Array<{ name: string; re: RegExp }> = [
+    { name: 'Edge', re: /Edg(?:e|A|iOS)?\/([\d.]+)/i },
+    { name: 'Opera', re: /(?:OPR|Opera)\/([\d.]+)/i },
+    { name: 'Chrome', re: /Chrome\/([\d.]+)/i },
+    { name: 'Firefox', re: /Firefox\/([\d.]+)/i },
+    { name: 'Safari', re: /Version\/([\d.]+).*Safari/i },
+    { name: 'IE', re: /(?:MSIE |rv:)([\d.]+)/i },
+  ];
+  for (const m of browserMatchers) {
+    const hit = raw.match(m.re);
+    if (hit) {
+      browser = m.name;
+      browserVersion = (hit[1] ?? '').split('.').slice(0, 3).join('.');
+      break;
+    }
+  }
+
+  let os = 'unknown';
+  let osVersion = '';
+  if (/Windows NT/i.test(raw)) {
+    os = 'Windows';
+    osVersion = windowsNtToVersion(raw.match(/Windows NT ([\d.]+)/i)?.[1]);
+  } else if (/Android/i.test(raw)) {
+    os = 'Android';
+    osVersion = (raw.match(/Android ([\d.]+)/i)?.[1] ?? '').split('.').slice(0, 2).join('.');
+  } else if (/iPhone|iPad|iPod|iOS/i.test(raw)) {
+    os = 'iOS';
+    const v = raw.match(/(?:iPhone OS|CPU OS|CPU iPhone OS) ([\d_]+)/i)?.[1];
+    osVersion = (v ?? '').replace(/_/g, '.').split('.').slice(0, 2).join('.');
+  } else if (/Mac OS X/i.test(raw)) {
+    os = 'macOS';
+    const v = raw.match(/Mac OS X ([\d_]+)/i)?.[1];
+    osVersion = (v ?? '').replace(/_/g, '.').split('.').slice(0, 2).join('.');
+  } else if (/Linux/i.test(raw)) {
+    os = 'Linux';
+  }
+
   return {
-    browser: uam(BR),
-    os: uam(OL),
+    browser,
+    browserVersion,
+    os,
+    osVersion,
     language: N?.language || 'unknown',
   };
 }
