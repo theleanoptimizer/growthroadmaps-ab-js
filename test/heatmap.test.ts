@@ -318,6 +318,46 @@ describe('HeatmapTracker — proximity click signals', () => {
     expect(md.is_dead_click).toBe(false);
   });
 
+  it('resolves child click inside btn--red to the faux button with text/title', () => {
+    const batcher = makeBatcher();
+    tracker = makeTracker(batcher);
+
+    const section = document.createElement('div');
+    section.className = 'cq_content_sec2 textSlightlyLarger';
+    const cta = document.createElement('div');
+    cta.className = 'btn--red centerContent inlineBlock customQuotePopup';
+    cta.title = 'Get a Custom Tour Quote';
+    const label = document.createElement('span');
+    label.textContent = 'GET A CUSTOM TOUR QUOTE';
+    cta.appendChild(label);
+    section.appendChild(cta);
+    document.body.appendChild(section);
+
+    fireClick(label);
+
+    expect(batcher.pushed.length).toBe(1);
+    const md = (batcher.pushed[0] as { metadata: Record<string, unknown> }).metadata;
+    expect(md.is_interactive).toBe(true);
+    expect(md.element_tag).toBe('div');
+    expect(String(md.element_selector)).toContain('btn--red');
+    expect(md.element_text).toBe('GET A CUSTOM TOUR QUOTE');
+  });
+
+  it('uses title when btn--red has no textContent', () => {
+    const batcher = makeBatcher();
+    tracker = makeTracker(batcher);
+
+    const cta = document.createElement('div');
+    cta.className = 'btn--red';
+    cta.title = 'Get a Custom Tour Quote';
+    document.body.appendChild(cta);
+    fireClick(cta);
+
+    const md = (batcher.pushed[0] as { metadata: Record<string, unknown> }).metadata;
+    expect(md.element_text).toBe('Get a Custom Tour Quote');
+    expect(md.is_interactive).toBe(true);
+  });
+
   it('preserves click timestamp at emit time', () => {
     vi.restoreAllMocks();
     vi.spyOn(Math, 'random').mockReturnValue(0);

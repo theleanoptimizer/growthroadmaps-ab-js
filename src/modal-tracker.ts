@@ -1,5 +1,6 @@
 import { EventBatcher } from './batcher';
 import { registerClickHandler } from './click-delegate';
+import { isInteractiveControl, resolveInteractiveClickTarget } from './click-interactivity';
 import { getCurrentPagePath, getDeviceType, nowIso } from './session-context';
 import { isSensitiveElement, sanitizeVisibleText } from './element-privacy';
 
@@ -51,7 +52,7 @@ function looksLikeModal(el: Element): boolean {
 
 function findModalContainer(root: Document | Element = document): Element | null {
   const candidates = root.querySelectorAll(
-    '[role="dialog"], [aria-modal="true"], [class*="modal" i], [class*="dialog" i], [class*="overlay" i]',
+    '[role="dialog"], [aria-modal="true"], [class*="modal" i], [class*="dialog" i], [class*="overlay" i], [class*="popup" i]',
   );
   for (const el of Array.from(candidates)) {
     if (looksLikeModal(el)) return el;
@@ -131,8 +132,10 @@ export class ModalTracker {
 
     const onClick = (e: MouseEvent) => {
       if (!this.#canTrack()) return;
-      const target = (e.target as Element | null)?.closest('button, [role="button"], a, input[type="button"], input[type="submit"]');
-      if (!target || isSensitiveElement(target)) return;
+      const raw = e.target;
+      if (!(raw instanceof Element)) return;
+      const target = resolveInteractiveClickTarget(raw);
+      if (!isInteractiveControl(target) || isSensitiveElement(target)) return;
 
       const anchor = target.closest('a');
       if (anchor) {
@@ -145,10 +148,11 @@ export class ModalTracker {
         return;
       }
 
+      const title = target.getAttribute('title')?.trim().replace(/\s+/g, ' ').slice(0, 120);
       this.#pendingClick = {
         target,
         selector: getSelector(target),
-        text: sanitizeVisibleText(target),
+        text: sanitizeVisibleText(target) || title,
       };
       if (this.#detectTimer !== null) clearTimeout(this.#detectTimer);
       this.#detectTimer = setTimeout(() => this.#tryDetectOpen(), MODAL_DETECT_MS);

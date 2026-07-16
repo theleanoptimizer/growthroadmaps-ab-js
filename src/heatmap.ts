@@ -1,6 +1,6 @@
 import { EventBatcher } from './batcher';
 import { registerClickHandler } from './click-delegate';
-import { looksClickable } from './click-interactivity';
+import { looksClickable, resolveInteractiveClickTarget } from './click-interactivity';
 import { ClickProximityTracker } from './click-proximity';
 import { isSensitiveElement, sanitizeVisibleText } from './element-privacy';
 import {
@@ -139,8 +139,10 @@ export class HeatmapTracker {
   #handleClick(e: MouseEvent): void {
     if (!this.#tracking) return;
 
-    const target = e.target;
-    if (!(target instanceof Element)) return;
+    const rawTarget = e.target;
+    if (!(rawTarget instanceof Element)) return;
+
+    const el = resolveInteractiveClickTarget(rawTarget);
 
     const vw = window.innerWidth || 1;
     const vh = window.innerHeight || 1;
@@ -151,7 +153,7 @@ export class HeatmapTracker {
     const y = (scrollTop + e.clientY) / pageHeight;
     const now = Date.now();
     const { isDeadClick, isRageClick } = this.#proximity.record(e.clientX, e.clientY, now);
-    const interactive = looksClickable(target);
+    const interactive = looksClickable(el);
 
     if (!isRageClick && !isDeadClick) {
       const gx = Math.floor(x * CLICK_COALESCE_GRID);
@@ -162,17 +164,20 @@ export class HeatmapTracker {
       this.#clickCoalesceMap.set(key, now);
     }
 
-    const sensitive = isSensitiveElement(target);
-    const elementText = sensitive ? undefined : sanitizeVisibleText(target);
-    const rawAria = sensitive ? null : target.getAttribute('aria-label');
+    const sensitive = isSensitiveElement(el);
+    const title = !sensitive
+      ? el.getAttribute('title')?.trim().replace(/\s+/g, ' ').slice(0, 120)
+      : undefined;
+    const elementText = sensitive ? undefined : sanitizeVisibleText(el) || title || undefined;
+    const rawAria = sensitive ? null : el.getAttribute('aria-label');
     const ariaLabel =
       rawAria && rawAria.trim()
         ? rawAria.trim().replace(/\s+/g, ' ').slice(0, 120)
         : undefined;
-    const elementRole = target.getAttribute('role')?.trim().slice(0, 40) || undefined;
-    const sectionHeading = sensitive ? undefined : nearestSectionHeading(target);
+    const elementRole = el.getAttribute('role')?.trim().slice(0, 40) || undefined;
+    const sectionHeading = sensitive ? undefined : nearestSectionHeading(el);
     const sectionCategory = sectionHeading ? inferClientSectionCategory(sectionHeading) : undefined;
-    const elementHref = sensitive ? undefined : clickElementHref(target);
+    const elementHref = sensitive ? undefined : clickElementHref(el);
 
     const evt: HeatmapClickEvent = {
       type: 'heatmap_click',
@@ -186,8 +191,8 @@ export class HeatmapTracker {
         y,
         viewport_width: vw,
         viewport_height: vh,
-        element_selector: getSelector(target),
-        element_tag: target.tagName.toLowerCase(),
+        element_selector: getSelector(el),
+        element_tag: el.tagName.toLowerCase(),
         element_text: elementText,
         aria_label: ariaLabel,
         element_role: elementRole,
