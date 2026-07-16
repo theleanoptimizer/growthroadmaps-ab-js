@@ -321,8 +321,9 @@ async function build() {
   console.log("  dist/index.d.ts");
 
   // Gzip budget: core bundle. Tier 2.5 _ab_sid cookie + CallRail session pull (~13.6 KB gzip);
-  // domain guard + page_host metadata for authorized tracking hostnames (~14.0 KB gzip).
-  const GZ_BUDGET = 14500;
+  // domain guard + page_host metadata for authorized tracking hostnames (~14.0 KB gzip);
+  // browser/OS version embedded in identity metadata for Session Analysis (~14.2 KB gzip).
+  const GZ_BUDGET = 14600;
   if (gz > GZ_BUDGET) {
     console.error(
       "\nERROR: Core bundle gzipped size is " + gz + " bytes (" + gzKB + " KB) — exceeds " + GZ_BUDGET + " byte budget!"

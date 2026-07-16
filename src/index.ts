@@ -414,9 +414,7 @@ export class GrowthRoadmaps {
   #visitorType: VisitorType = 'new';
   #visitorSessionId = '';
   #browser = 'unknown';
-  #browserVersion = '';
   #os = 'unknown';
-  #osVersion = '';
   #language = 'unknown';
   #callrailSessionUuid = '';
   #callrailCaptureEnabled = true;
@@ -444,9 +442,7 @@ export class GrowthRoadmaps {
     this.#visitorSessionId = touchVisitorSession(pk, this.#consent);
     const device = getBrowserOsLanguage();
     this.#browser = device.browser;
-    this.#browserVersion = device.browserVersion;
     this.#os = device.os;
-    this.#osVersion = device.osVersion;
     this.#language = device.language;
     if (!c.sessionId) {
       try {
@@ -785,9 +781,7 @@ export class GrowthRoadmaps {
       visitor_type: this.#visitorType,
       visitor_session_id: this.#visitorSessionId,
       browser: this.#browser,
-      browser_version: this.#browserVersion || undefined,
       os: this.#os,
-      os_version: this.#osVersion || undefined,
       language: this.#language,
       page_host: getPageHost(),
     };

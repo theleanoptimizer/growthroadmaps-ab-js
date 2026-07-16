@@ -78,71 +78,29 @@ export function refreshVisitorSessionActivity(projectKey: string, visitorSession
   setCookie(key, JSON.stringify({ id: visitorSessionId, lastActivityAt: Date.now() }));
 }
 
-function windowsNtToVersion(nt: string | undefined): string {
-  switch (nt) {
-    case '10.0': return '10/11';
-    case '6.3': return '8.1';
-    case '6.2': return '8';
-    case '6.1': return '7';
-    default: return nt ?? '';
-  }
-}
-
-/** Parse browser/OS names + versions from the current user agent. */
-export function getBrowserOsLanguage(): {
-  browser: string;
-  browserVersion: string;
-  os: string;
-  osVersion: string;
-  language: string;
-} {
-  const raw = N?.userAgent?.trim() ?? '';
+/** Browser/OS (+ embedded versions) from UA. e.g. Chrome/131.0.0, Windows NT 10.0 */
+export function getBrowserOsLanguage(): { browser: string; os: string; language: string } {
+  const ua = N?.userAgent ?? '';
   let browser = 'unknown';
-  let browserVersion = '';
-  const browserMatchers: Array<{ name: string; re: RegExp }> = [
-    { name: 'Edge', re: /Edg(?:e|A|iOS)?\/([\d.]+)/i },
-    { name: 'Opera', re: /(?:OPR|Opera)\/([\d.]+)/i },
-    { name: 'Chrome', re: /Chrome\/([\d.]+)/i },
-    { name: 'Firefox', re: /Firefox\/([\d.]+)/i },
-    { name: 'Safari', re: /Version\/([\d.]+).*Safari/i },
-    { name: 'IE', re: /(?:MSIE |rv:)([\d.]+)/i },
-  ];
-  for (const m of browserMatchers) {
-    const hit = raw.match(m.re);
-    if (hit) {
-      browser = m.name;
-      browserVersion = (hit[1] ?? '').split('.').slice(0, 3).join('.');
-      break;
-    }
-  }
+  let m: RegExpMatchArray | null;
+  const v = (s: string | undefined, n: number) =>
+    (s ?? '').replace(/_/g, '.').split('.').slice(0, n).join('.');
+  // Edge before Chrome. Opera/IE omitted for core gzip budget.
+  if ((m = ua.match(/Edg\/([\d.]+)/i))) browser = 'Edge/' + v(m[1], 3);
+  else if ((m = ua.match(/Chrome\/([\d.]+)/i))) browser = 'Chrome/' + v(m[1], 3);
+  else if ((m = ua.match(/Firefox\/([\d.]+)/i))) browser = 'Firefox/' + v(m[1], 3);
+  else if ((m = ua.match(/Version\/([\d.]+).*Safari/i))) browser = 'Safari/' + v(m[1], 3);
 
   let os = 'unknown';
-  let osVersion = '';
-  if (/Windows NT/i.test(raw)) {
-    os = 'Windows';
-    osVersion = windowsNtToVersion(raw.match(/Windows NT ([\d.]+)/i)?.[1]);
-  } else if (/Android/i.test(raw)) {
-    os = 'Android';
-    osVersion = (raw.match(/Android ([\d.]+)/i)?.[1] ?? '').split('.').slice(0, 2).join('.');
-  } else if (/iPhone|iPad|iPod|iOS/i.test(raw)) {
-    os = 'iOS';
-    const v = raw.match(/(?:iPhone OS|CPU OS|CPU iPhone OS) ([\d_]+)/i)?.[1];
-    osVersion = (v ?? '').replace(/_/g, '.').split('.').slice(0, 2).join('.');
-  } else if (/Mac OS X/i.test(raw)) {
-    os = 'macOS';
-    const v = raw.match(/Mac OS X ([\d_]+)/i)?.[1];
-    osVersion = (v ?? '').replace(/_/g, '.').split('.').slice(0, 2).join('.');
-  } else if (/Linux/i.test(raw)) {
-    os = 'Linux';
-  }
+  if ((m = ua.match(/Windows NT ([\d.]+)/i))) os = 'Windows NT ' + m[1];
+  else if ((m = ua.match(/Android ([\d.]+)/i))) os = 'Android ' + v(m[1], 2);
+  else if (/iPhone|iPad|iPod/i.test(ua)) {
+    const iv = v(ua.match(/(?:iPhone OS|CPU OS) ([\d_]+)/i)?.[1], 2);
+    os = iv ? 'iOS ' + iv : 'iOS';
+  } else if ((m = ua.match(/Mac OS X ([\d_]+)/i))) os = 'Mac OS X ' + m[1];
+  else if (/Linux/i.test(ua)) os = 'Linux';
 
-  return {
-    browser,
-    browserVersion,
-    os,
-    osVersion,
-    language: N?.language || 'unknown',
-  };
+  return { browser, os, language: N?.language || 'unknown' };
 }
 
 /** Common file extensions for codeless download tracking. */
