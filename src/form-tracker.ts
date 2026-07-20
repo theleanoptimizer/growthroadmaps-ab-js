@@ -105,7 +105,12 @@ interface FormState {
   fields: Map<string, FieldMetrics>;
   visitCounter: number;
   submitted: boolean;
+  /** Set when navigation follows a recent in-form click (JS/popup booking CTAs). */
+  completionMode?: 'native' | 'navigation';
 }
+
+/** In-form click within this window before pageChanged counts as navigation completion. */
+const NAVIGATION_COMPLETION_CLICK_MS = 3000;
 
 export interface FormConfigInput {
   capture_mode: string;
@@ -167,6 +172,8 @@ export class FormTracker {
   #forms = new Map<HTMLFormElement, FormState>();
   #flushedForms = new Set<string>();
   #activeField: { form: HTMLFormElement; field: Element } | null = null;
+  #lastInFormClickAt: number | null = null;
+  #lastInFormClickForm: HTMLFormElement | null = null;
   #cleanups: (() => void)[] = [];
 
   constructor(
@@ -278,6 +285,7 @@ export class FormTracker {
       fields: new Map(),
       visitCounter: 0,
       submitted: false,
+      completionMode: undefined,
     };
 
     const fields = form.querySelectorAll('input, select, textarea');
@@ -391,20 +399,40 @@ export class FormTracker {
       const state = this.#forms.get(form);
       if (state) {
         state.submitted = true;
+        state.completionMode = 'native';
         this.#flushForm(form);
       }
+    };
+
+    const onClick = (e: Event) => {
+      if (!this.#tracking) return;
+      const target = e.target;
+      if (!(target instanceof Element)) return;
+      const form = target.closest('form') as HTMLFormElement | null;
+      if (!form) return;
+      // Only CTA-like controls — field clicks should not suppress abandon on tab hide.
+      const control = target.closest(
+        'a, button, input[type="submit"], input[type="button"], input[type="image"], [role="button"]',
+      );
+      if (!control || !form.contains(control)) return;
+      this.#registerForm(form);
+      if (!this.#forms.has(form)) return;
+      this.#lastInFormClickAt = Date.now();
+      this.#lastInFormClickForm = form;
     };
 
     document.addEventListener('focusin', onFocus, { passive: true, capture: true });
     document.addEventListener('focusout', onBlur, { passive: true, capture: true });
     document.addEventListener('input', onInput, { passive: true, capture: true });
     document.addEventListener('submit', onSubmit, { capture: true });
+    document.addEventListener('click', onClick, { passive: true, capture: true });
 
     this.#cleanups.push(() => {
       document.removeEventListener('focusin', onFocus, true);
       document.removeEventListener('focusout', onBlur, true);
       document.removeEventListener('input', onInput, true);
       document.removeEventListener('submit', onSubmit, true);
+      document.removeEventListener('click', onClick, true);
     });
 
     const observer = new MutationObserver(() => {
@@ -475,6 +503,7 @@ export class FormTracker {
         form_selector: state.selector,
         form_action: state.action,
         submitted: state.submitted,
+        ...(state.completionMode ? { completion_mode: state.completionMode } : {}),
         device_type: getDeviceType(),
         fields,
       },
@@ -488,7 +517,20 @@ export class FormTracker {
     this.#forms.delete(form);
   }
 
+  /** Mark forms completed via JS/popup navigation when a recent CTA click preceded the leave. */
+  #markNavigationCompletions(): void {
+    if (this.#lastInFormClickAt == null || !this.#lastInFormClickForm) return;
+    if (Date.now() - this.#lastInFormClickAt > NAVIGATION_COMPLETION_CLICK_MS) return;
+    const form = this.#lastInFormClickForm;
+    const state = this.#forms.get(form);
+    if (!state || state.submitted) return;
+    state.submitted = true;
+    state.completionMode = 'navigation';
+  }
+
   #flushAll(): void {
+    // Full-page nav often hits visibility/beforeunload before SPA pageChanged.
+    this.#markNavigationCompletions();
     for (const [form] of this.#forms) {
       this.#flushForm(form);
     }
@@ -500,6 +542,8 @@ export class FormTracker {
     this.#forms.clear();
     this.#flushedForms.clear();
     this.#activeField = null;
+    this.#lastInFormClickAt = null;
+    this.#lastInFormClickForm = null;
     this.#tracking = this.#shouldTrack();
     if (this.#tracking) {
       this.#discoverForms();
