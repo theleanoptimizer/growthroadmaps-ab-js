@@ -920,6 +920,9 @@ export class GrowthRoadmaps {
                 this.#clearPanelAssets();
                 const pm = await import('./panels') as PanelsMod;
                 const pr = typeof pm.__lazyLoad === 'function' ? await pm.__lazyLoad() : pm;
+                if (!pr || typeof pr.renderPreviewPanel !== 'function' || typeof pr.applyPanelVariant !== 'function') {
+                  throw new Error('panels chunk incomplete');
+                }
                 this.#panelsMod = pr;
                 const selections = pr.getStoredSelections();
                 for (const exp of panelConfig.experiments) {
@@ -943,9 +946,16 @@ export class GrowthRoadmaps {
                 console.info('[GR] Preview panel mode active — tracking disabled');
                 return;
               } else if (r.status === 403) {
+                console.warn('[GR] Preview panel: invalid key (403)');
                 try { sessionStorage.removeItem('_ab_panel_key'); sessionStorage.removeItem('_ab_panel_pk'); } catch {}
+              } else {
+                console.warn('[GR] Preview panel: fetch ' + r.status);
               }
-            } catch {}
+            } catch (e) {
+              console.warn('[GR] Preview panel failed (check gr-panels.min.js CDN)', e);
+            }
+          } else {
+            console.warn('[GR] Preview panel: missing key');
           }
           this.#pv = true;
           revealPage();

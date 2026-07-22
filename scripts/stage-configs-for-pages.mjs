@@ -16,13 +16,34 @@
  *   CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN
  */
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = join(__dirname, "..", "dist");
 const CONFIG_OUT_DIR = join(DIST_DIR, "configs");
+const REQUIRED_BUNDLES_PATH = join(__dirname, "..", "required-bundles.json");
+
+/** Refuse Pages deploys that would ship growth.min.js without lazy chunks (e.g. gr-panels.min.js). */
+async function assertRequiredBundlesInDist() {
+  const required = JSON.parse(await readFile(REQUIRED_BUNDLES_PATH, "utf8"));
+  const missing = [];
+  for (const name of required) {
+    try {
+      const s = await stat(join(DIST_DIR, name));
+      if (!s.size) missing.push(name);
+    } catch {
+      missing.push(name);
+    }
+  }
+  if (missing.length) {
+    throw new Error(
+      `[stage-configs] Required SDK bundles missing from dist/ — refusing deploy: ${missing.join(", ")}. ` +
+        `Preview panel (gr-panels.min.js) and other lazy features will 404 on js.growthroadmaps.com without these files.`,
+    );
+  }
+}
 
 const PAGES_PROJECT_NAME = "growthroadmaps-ab-js";
 const CONFIG_API_BASE = "https://growthroadmaps.com/api/sdk/config/";
@@ -177,8 +198,12 @@ async function mapWithConcurrency(items, concurrency, fn) {
 }
 
 async function main() {
+  // Always verify lazy chunks before Pages publish — config staging is optional,
+  // but shipping growth.min.js without gr-panels.min.js breaks preview panel.
+  await assertRequiredBundlesInDist();
+
   if (process.env.SKIP_CONFIG_STAGING === "1") {
-    console.log("[stage-configs] SKIP_CONFIG_STAGING=1 — skipping");
+    console.log("[stage-configs] SKIP_CONFIG_STAGING=1 — skipping config copy");
     return;
   }
 

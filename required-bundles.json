@@ -1,0 +1,13 @@
+[
+  "growth.min.js",
+  "goals.min.js",
+  "gr-attrs.min.js",
+  "gr-panels.min.js",
+  "heatmap.min.js",
+  "survey.min.js",
+  "survey-widget.min.js",
+  "form-tracker.min.js",
+  "session-tracker.min.js",
+  "modal-tracker.min.js",
+  "help-widget-tracker.min.js"
+]

@@ -254,13 +254,13 @@ test.describe('Lazy chunk loading — end-to-end', () => {
     ).toBe(false);
   });
 
-  test('panels.min.js is served correctly and references __grPanels', async ({ page }) => {
-    const resp = await page.request.get(`${DIST_BASE}/panels.min.js`);
-    expect(resp.ok(), 'panels.min.js should be served by the static dist server').toBe(true);
+  test('gr-panels.min.js is served correctly and references __grPanels', async ({ page }) => {
+    const resp = await page.request.get(`${DIST_BASE}/gr-panels.min.js`);
+    expect(resp.ok(), 'gr-panels.min.js should be served by the static dist server').toBe(true);
 
     const src = await resp.text();
-    expect(src.length, 'panels.min.js should be non-empty').toBeGreaterThan(100);
-    expect(src, 'panels.min.js should define the __grPanels global').toContain('__grPanels');
+    expect(src.length, 'gr-panels.min.js should be non-empty').toBeGreaterThan(100);
+    expect(src, 'gr-panels.min.js should define the __grPanels global').toContain('__grPanels');
   });
 
   test('experiment bootstrap fast path skips anti-flicker without cached experiments', async ({ page }) => {

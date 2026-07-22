@@ -14,6 +14,8 @@ describe('preview mode API host', () => {
     localStorage.clear();
     sessionStorage.clear();
     document.documentElement.style.opacity = '';
+    document.getElementById('gr-preview-panel-host')?.remove();
+    document.querySelectorAll('style[data-ab-panel-css]').forEach((el) => el.remove());
     delete (window as any).gr;
     delete (window as any).__gr_loader_ran;
     delete (window as any).__ab_reveal;
@@ -270,6 +272,29 @@ describe('preview mode API host', () => {
       `${DEFAULT_API_HOST}/api/ab/preview/panel?pk=${encodeURIComponent(PROJECT_KEY)}&key=${encodeURIComponent(PANEL_KEY)}`,
     );
     expect(document.getElementById('gr-preview-panel-host')).not.toBeNull();
+  });
+
+  it('warns when preview panel config fetch fails instead of failing silently', async () => {
+    history.replaceState({}, '', `/?_ab_preview=panel&key=${PANEL_KEY}`);
+    (window as any).__gr_loader_ran = true;
+    (window as any).__gr_loader_cfg = { pk: PROJECT_KEY, host: window.location.origin };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    fetchMock.mockImplementation(() =>
+      Promise.resolve({ ok: false, status: 500, json: async () => ({}) }),
+    );
+
+    const sdk = new GrowthRoadmaps({
+      projectKey: PROJECT_KEY,
+      apiHost: window.location.origin,
+      mutationObserver: false,
+    });
+    await sdk.init();
+
+    expect(document.getElementById('gr-preview-panel-host')).toBeNull();
+    expect(
+      warnSpy.mock.calls.some(([msg]) => String(msg).includes('Preview panel: fetch')),
+    ).toBe(true);
+    warnSpy.mockRestore();
   });
 
   it('keeps explicit apiHost when legacy loader host is not set', async () => {

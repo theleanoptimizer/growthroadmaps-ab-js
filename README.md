@@ -10,6 +10,8 @@ Include the SDK via a script tag or install as an ES module.
 
 The `growthroadmaps-ab-js` repo is deployed by Cloudflare Pages on every push. The build runs `npm run build`, which also runs `scripts/stage-configs-for-pages.mjs` to copy `/configs/*.json` files into `dist/configs/` so SDK deploys do not remove configs published by the main app.
 
+Required lazy chunks (including `gr-panels.min.js` for the A/B preview panel) are listed in `required-bundles.json`. The build and config-staging step refuse to finish if any of those files are missing from `dist/`.
+
 **Config discovery** (in order):
 
 1. Recent Cloudflare Pages deployment manifests — requires CF env vars below

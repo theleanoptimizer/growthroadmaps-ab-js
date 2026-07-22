@@ -76,7 +76,8 @@ function createLazyPlugin(moduleName, globalVar, opts = {}) {
 const lazyHeatmapPlugin      = createLazyPlugin("heatmap",       "__grHeatmap");
 const lazySurveyPlugin        = createLazyPlugin("survey",        "__grSurvey");
 const lazySurveyWidgetPlugin  = createLazyPlugin("survey-widget", "__grSurveyWidget");
-const lazyPanelsPlugin        = createLazyPlugin("panels",        "__grPanels");
+// Public chunk name avoids filters that match bare "panels" in script URLs.
+const lazyPanelsPlugin        = createLazyPlugin("panels",        "__grPanels", { chunkFile: "gr-panels" });
 const lazyGoalsPlugin         = createLazyPlugin("goals",         "__grGoals");
 // Public chunk name avoids ad-block lists that match "audience" in script URLs.
 const lazyAudiencePlugin      = createLazyPlugin("audience", "__grAudience", {
@@ -157,8 +158,11 @@ async function build() {
     format: "iife",
     globalName: "__grPanels",
     ...minifyOptions,
-    outfile: "dist/panels.min.js",
+    outfile: "dist/gr-panels.min.js",
   });
+  // Alias for browsers still holding a cached growth.min.js that loads panels.min.js.
+  // Safe to remove once CDN cache (max-age=14400) has fully rolled past that version.
+  fs.copyFileSync("dist/gr-panels.min.js", "dist/panels.min.js");
 
   await esbuild.build({
     entryPoints: ["src/goals.ts"],
@@ -287,7 +291,7 @@ async function build() {
   const surveyWidgetSizeKB = (surveyWidgetFile.size / 1024).toFixed(2);
   const heatmapFile = fs.statSync("dist/heatmap.min.js");
   const heatmapSizeKB = (heatmapFile.size / 1024).toFixed(2);
-  const panelsFile = fs.statSync("dist/panels.min.js");
+  const panelsFile = fs.statSync("dist/gr-panels.min.js");
   const panelsSizeKB = (panelsFile.size / 1024).toFixed(2);
   const goalsFile = fs.statSync("dist/goals.min.js");
   const goalsSizeKB = (goalsFile.size / 1024).toFixed(2);
@@ -306,7 +310,7 @@ async function build() {
   console.log("\nBuild complete!");
   console.log("  dist/growth.min.js       " + sizeKB + " KB raw / " + gzKB + " KB gzip — core bundle");
   console.log("  dist/growth-loader.min.js " + loaderSizeKB + " KB");
-  console.log("  dist/panels.min.js       " + panelsSizeKB + " KB — lazy chunk");
+  console.log("  dist/gr-panels.min.js    " + panelsSizeKB + " KB — lazy chunk (preview/review/builder)");
   console.log("  dist/goals.min.js        " + goalsSizeKB + " KB — lazy chunk");
   console.log("  dist/gr-attrs.min.js     " + audSizeKB + " KB — lazy chunk (audience attrs)");
   console.log("  dist/form-tracker.min.js " + ftSizeKB + " KB — lazy chunk");
@@ -322,8 +326,9 @@ async function build() {
 
   // Gzip budget: core bundle. Tier 2.5 _ab_sid cookie + CallRail session pull (~13.6 KB gzip);
   // domain guard + page_host metadata for authorized tracking hostnames (~14.0 KB gzip);
-  // browser/OS version embedded in identity metadata for Session Analysis (~14.2 KB gzip).
-  const GZ_BUDGET = 14600;
+  // browser/OS version embedded in identity metadata for Session Analysis (~14.2 KB gzip);
+  // preview-panel failure logging so CDN chunk 404s are visible in console (~14.3 KB gzip).
+  const GZ_BUDGET = 14800;
   if (gz > GZ_BUDGET) {
     console.error(
       "\nERROR: Core bundle gzipped size is " + gz + " bytes (" + gzKB + " KB) — exceeds " + GZ_BUDGET + " byte budget!"
@@ -335,6 +340,25 @@ async function build() {
     console.error(
       "\nWARNING: Loader is " + loaderSizeKB + " KB (exceeds 2 KB limit)",
     );
+  }
+
+  // Fail the build (and Cloudflare Pages deploy) if any lazy chunk is missing.
+  // Preview panel, surveys, etc. load these at runtime from js.growthroadmaps.com.
+  const requiredBundles = JSON.parse(
+    fs.readFileSync(require("path").join(__dirname, "required-bundles.json"), "utf8"),
+  );
+  const missingBundles = requiredBundles.filter((name) => {
+    try {
+      return !fs.statSync("dist/" + name).size;
+    } catch {
+      return true;
+    }
+  });
+  if (missingBundles.length) {
+    console.error(
+      "\nERROR: Required CDN bundles missing from dist/: " + missingBundles.join(", "),
+    );
+    process.exit(1);
   }
 }
 
