@@ -28,6 +28,11 @@ const REQUIRED_BUNDLES_PATH = join(__dirname, "..", "required-bundles.json");
 /** Refuse Pages deploys that would ship growth.min.js without lazy chunks (e.g. gr-panels.min.js). */
 async function assertRequiredBundlesInDist() {
   const required = JSON.parse(await readFile(REQUIRED_BUNDLES_PATH, "utf8"));
+  if (!Array.isArray(required) || required.length === 0) {
+    throw new Error(
+      "[stage-configs] required-bundles.json is empty or invalid — refusing deploy that could wipe lazy chunks",
+    );
+  }
   const missing = [];
   for (const name of required) {
     try {
