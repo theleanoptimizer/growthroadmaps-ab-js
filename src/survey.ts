@@ -294,7 +294,11 @@ export class SurveyManager {
               D.addEventListener('click', (e: Event) => {
                 if (!(e.target as Element)?.matches?.(trigger.cssSelector!)) return;
                 if (hasPageUrl && !surveyPageUrlMatches(survey)) return;
-                this.#showSurvey(survey);
+                const delay = (trigger.delay || 0) * 1000;
+                setTimeout(() => {
+                  if (hasPageUrl && !surveyPageUrlMatches(survey)) return;
+                  this.#showSurvey(survey);
+                }, delay);
               });
             }
             break;
