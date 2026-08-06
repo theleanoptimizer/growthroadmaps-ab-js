@@ -8,24 +8,33 @@ Include the SDK via a script tag or install as an ES module.
 
 ### Cloudflare Pages (`js.growthroadmaps.com`)
 
-The `growthroadmaps-ab-js` repo is deployed by Cloudflare Pages on every push. The build runs `npm run build`, which also runs `scripts/stage-configs-for-pages.mjs` to copy `/configs/*.json` files into `dist/configs/` so SDK deploys do not remove configs published by the main app.
+The `growthroadmaps-ab-js` repo is deployed by Cloudflare Pages on every push. The build runs `npm run build`, which also runs `scripts/stage-configs-for-pages.mjs`.
 
-Required lazy chunks (including `gr-panels.min.js` for the A/B preview panel) are listed in `required-bundles.json`. The build and config-staging step refuse to finish if any of those files are missing from `dist/`.
+**Dual writers:** Pages git builds and Heroku wrangler config publishes both do a **full-site replace**. They share Redis lock `sdk:cdn:deploy:lock` via `POST/DELETE /api/sdk/cdn-deploy-lock` (Pages) and `cloudflarePagesSdkPublisher` (Heroku). A Pages build that cannot acquire the lock within ~2 minutes **fails** so it cannot race a wrangler deploy. After a successful stage, the lock is heartbeated (~10 minutes) to cover Pages upload/activate; it is not released on success (TTL expires). On fatal staging errors the lock is released so Heroku can retry.
+
+**What the post-build step does:**
+
+1. Acquire the shared CDN deploy lock (when `SDK_CONFIG_KEYS_TOKEN` is set)
+2. Refuse the build if any file in `required-bundles.json` is missing from `dist/` (including `growth.min.js` and `gr-panels.min.js`)
+3. Backfill any prior production `*.min.js` not already in `dist/` (new build always wins; fills aliases like `panels.min.js` / `growth-loader.min.js`)
+4. Re-assert required bundles
+5. Stage `/configs/*.json` from prior deployments / API — **fail** if prior production had configs and zero could be staged
+6. Heartbeat the lock for the activate window
 
 **Config discovery** (in order):
 
 1. Recent Cloudflare Pages deployment manifests — requires CF env vars below
 2. Fallback: `GET https://growthroadmaps.com/api/sdk/config-keys.json` lists all project keys; each config is then fetched from the API (which auto-generates from the database when missing)
 
-When `SDK_CONFIG_KEYS_TOKEN` is set on the main app, the config-keys endpoint requires `Authorization: Bearer <token>`. Set the same value on Cloudflare Pages build env so `stage-configs-for-pages.mjs` can authenticate.
+When `SDK_CONFIG_KEYS_TOKEN` is set on the main app, the config-keys and CDN lock endpoints require `Authorization: Bearer <token>`. Set the same value on Cloudflare Pages build env so `stage-configs-for-pages.mjs` can authenticate and take the lock.
 
-Set these **Cloudflare Pages environment variables** (production) so the post-build step can read the current config manifest from prior deployments:
+Set these **Cloudflare Pages environment variables** (production):
 
 - `CLOUDFLARE_ACCOUNT_ID`
 - `CLOUDFLARE_API_TOKEN` (Pages read access for the account)
-- `SDK_CONFIG_KEYS_TOKEN` (must match Heroku when config-keys auth is enabled)
+- `SDK_CONFIG_KEYS_TOKEN` (must match Heroku — required for lock + config-keys auth)
 
-Config file bodies are fetched from `https://growthroadmaps.com/api/sdk/config/{projectKey}.json`. The config-keys fallback works without CF env vars. Local builds skip staging when `SKIP_CONFIG_STAGING=1`.
+Config file bodies are fetched from `https://growthroadmaps.com/api/sdk/config/{projectKey}.json`. Local builds skip lock/staging when `SKIP_CONFIG_STAGING=1` or when `SDK_CONFIG_KEYS_TOKEN` is unset (lock skipped with a warning; required-bundle assert still runs).
 
 ## Usage
 
