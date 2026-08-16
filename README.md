@@ -34,7 +34,7 @@ Set these **Cloudflare Pages environment variables** (production):
 - `CLOUDFLARE_API_TOKEN` (Pages read access for the account)
 - `SDK_CONFIG_KEYS_TOKEN` (must match Heroku — required for lock + config-keys auth)
 
-Config file bodies are fetched from `https://growthroadmaps.com/api/sdk/config/{projectKey}.json`. Local builds skip lock/staging when `SKIP_CONFIG_STAGING=1` or when `SDK_CONFIG_KEYS_TOKEN` is unset (lock skipped with a warning; required-bundle assert still runs).
+Config file bodies are fetched from `https://growthroadmaps.com/api/sdk/config/{projectKey}.json`. Local builds skip lock/staging when `SKIP_CONFIG_STAGING=1` or when `SDK_CONFIG_KEYS_TOKEN` is unset (lock skipped with a warning; required-bundle assert still runs). Heroku slug compile (`heroku-postbuild`) always sets `SKIP_CONFIG_STAGING=1` — it only needs `sdk-client/dist` JS bundles; taking the CDN lock during app deploy races worker wrangler publishes and can fail the whole build.
 
 ## Usage
 

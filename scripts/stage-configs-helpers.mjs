@@ -60,3 +60,13 @@ export function manifestHash(fullHash) {
 export function isRetryableLockStatus(status) {
   return status === 409 || status === 429 || status === 503;
 }
+
+/**
+ * Heroku slug compile must not take the Pages CDN lock. That lock is only
+ * for writers that replace js.growthroadmaps.com (CF Pages + Heroku wrangler).
+ */
+export function shouldSkipConfigStaging(env = process.env) {
+  if (env.SKIP_CONFIG_STAGING === "1") return true;
+  if (env.CF_PAGES === "1") return false;
+  return typeof env.STACK === "string" && env.STACK.startsWith("heroku-");
+}

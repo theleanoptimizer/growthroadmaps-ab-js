@@ -27,6 +27,7 @@ import {
   projectKeyFromConfigPath,
   shouldFailOnConfigWipe,
   isRetryableLockStatus,
+  shouldSkipConfigStaging,
 } from "./stage-configs-helpers.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -381,7 +382,7 @@ async function stagePriorMinJs(deployments) {
 }
 
 async function main() {
-  const skipStaging = process.env.SKIP_CONFIG_STAGING === "1";
+  const skipStaging = shouldSkipConfigStaging();
   const lockHolder = `pages-build:${process.env.CF_PAGES_COMMIT_SHA || process.pid}:${Date.now()}`;
   let heldLock = null;
 
@@ -389,7 +390,9 @@ async function main() {
     if (!skipStaging) {
       heldLock = await acquireDeployLock(lockHolder);
     } else {
-      console.log("[stage-configs] SKIP_CONFIG_STAGING=1 — skipping lock + config/JS backfill");
+      console.log(
+        "[stage-configs] Skipping lock + config/JS backfill (Heroku slug compile or SKIP_CONFIG_STAGING=1)",
+      );
     }
 
     // Always verify lazy chunks before Pages publish.
