@@ -55,3 +55,8 @@ export function projectKeyFromConfigPath(configPath) {
 export function manifestHash(fullHash) {
   return fullHash.slice(0, 32);
 }
+
+/** Lock acquire statuses that mean "wait and try again", not fail the build. */
+export function isRetryableLockStatus(status) {
+  return status === 409 || status === 429 || status === 503;
+}

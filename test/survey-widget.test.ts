@@ -43,9 +43,13 @@ describe("renderSurveyWidget session meta", () => {
     const submit = shadow.querySelector('[data-action="next"]') as HTMLButtonElement;
     submit.click();
 
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    await vi.waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/respond"))).toBe(true);
+    });
 
-    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    const respondCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/respond"));
+    expect(respondCall).toBeTruthy();
+    const init = respondCall![1] as RequestInit;
     const body = JSON.parse(init.body as string) as {
       meta: Record<string, unknown>;
       respondentId?: string;
@@ -53,5 +57,34 @@ describe("renderSurveyWidget session meta", () => {
     expect(body.meta.session_id).toBe("sess-xyz");
     expect(body.meta.user_id).toBe("user-abc");
     expect(body.respondentId).toBe("user-abc");
+  });
+
+  it("posts a view ping once when the widget is shown", () => {
+    const survey: SurveyData = {
+      id: "survey-views",
+      name: "On-site survey",
+      questions: [{ id: "q1", type: "freeText", label: "Why?" }],
+      styling: {},
+    };
+
+    renderSurveyWidget(survey, "https://api.example.com", null, "team-1", new Set());
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.example.com/api/public/surveys/survey-views/view");
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("POST");
+  });
+
+  it("does not post a view ping when the survey was already shown this session", () => {
+    const survey: SurveyData = {
+      id: "survey-already-shown",
+      name: "On-site survey",
+      questions: [{ id: "q1", type: "freeText", label: "Why?" }],
+      styling: {},
+    };
+
+    renderSurveyWidget(survey, "https://api.example.com", null, "team-1", new Set(["survey-already-shown"]));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(document.getElementById("growth-surveys-widget")).toBeNull();
   });
 });

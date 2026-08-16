@@ -26,6 +26,7 @@ import {
   pickMinJsPaths,
   projectKeyFromConfigPath,
   shouldFailOnConfigWipe,
+  isRetryableLockStatus,
 } from "./stage-configs-helpers.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -113,7 +114,7 @@ async function acquireDeployLock(holder) {
           `[stage-configs] CDN deploy lock unauthorized — check SDK_CONFIG_KEYS_TOKEN on Pages`,
         );
       }
-      if (res.status !== 409 && res.status !== 503) {
+      if (!isRetryableLockStatus(res.status)) {
         throw new Error(`[stage-configs] CDN deploy lock failed: ${lastMessage}`);
       }
       console.warn(

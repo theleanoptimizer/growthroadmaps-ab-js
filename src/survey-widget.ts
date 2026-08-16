@@ -229,6 +229,11 @@ export function renderSurveyWidget(
   shownSurveys.add(survey.id);
   markSurveyShown(teamId, survey.id);
 
+  fetch(apiHost + '/api/public/surveys/' + survey.id + '/view', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  }).catch(function() {});
+
   const container = createShadowContainer();
   container.host.setAttribute('data-gs-survey-id', survey.id);
   activeWidgets.push({ surveyId: survey.id, host: container.host, survey });
