@@ -1,8 +1,11 @@
 [
   "growth.min.js",
+  "growth-loader.min.js",
   "goals.min.js",
   "gr-attrs.min.js",
+  "audience.min.js",
   "gr-panels.min.js",
+  "panels.min.js",
   "heatmap.min.js",
   "survey.min.js",
   "survey-widget.min.js",
