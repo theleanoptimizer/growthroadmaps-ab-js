@@ -185,6 +185,8 @@ async function build() {
     ...minifyOptions,
     outfile: "dist/gr-attrs.min.js",
   });
+  // Alias for browsers still holding a cached growth.min.js that loads audience.min.js.
+  fs.copyFileSync("dist/gr-attrs.min.js", "dist/audience.min.js");
 
   await esbuild.build({
     entryPoints: ["src/form-tracker.ts"],
