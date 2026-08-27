@@ -344,6 +344,21 @@ async function build() {
     );
   }
 
+  // Re-apply aliases immediately before the required-file check. Cloudflare
+  // Pages (growthroadmaps-ab-js) does a clean dist/; tsc emit into dist/ must
+  // not leave these missing. Old cached growth.min.js still requests them.
+  const aliases = [
+    ["dist/gr-panels.min.js", "dist/panels.min.js"],
+    ["dist/gr-attrs.min.js", "dist/audience.min.js"],
+  ];
+  for (const [src, dest] of aliases) {
+    if (!fs.existsSync(src)) {
+      console.error("\nERROR: Cannot create alias " + dest + " — missing " + src);
+      process.exit(1);
+    }
+    fs.copyFileSync(src, dest);
+  }
+
   // Fail the build (and Cloudflare Pages deploy) if any lazy chunk is missing.
   // Preview panel, surveys, etc. load these at runtime from js.growthroadmaps.com.
   const requiredBundles = JSON.parse(
