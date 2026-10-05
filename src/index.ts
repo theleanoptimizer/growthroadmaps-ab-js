@@ -129,8 +129,13 @@ function readCallRailSid(): string | undefined {
   return undefined;
 }
 
-function syncExpCookie(assignments: Map<string, Variant>, experiments: ExperimentConfig[]): void {
-  if (!D) return;
+/** GA4 user-property values are capped at 36 characters. */
+export const GA_USER_PROPERTY_VALUE_MAX = 36;
+
+export function experimentLabels(
+  assignments: Iterable<[string, { index?: number | null }]>,
+  experiments: ReadonlyArray<{ id: string; sequence_number?: number | null }>,
+): string[] {
   const labels: string[] = [];
   for (const [eid, v] of assignments) {
     const e = experiments.find(x => x.id === eid);
@@ -138,7 +143,51 @@ function syncExpCookie(assignments: Map<string, Variant>, experiments: Experimen
       labels.push(`EXP-${e.sequence_number}-${v.index}`);
     }
   }
+  return labels;
+}
+
+/** Oldest labels are dropped first so the newest tests still fit in a GA4 user property. */
+export function capGaDimensionValue(
+  labels: readonly string[],
+  maxLen = GA_USER_PROPERTY_VALUE_MAX,
+): string {
+  const kept = [...labels];
+  while (kept.length > 1 && kept.join(',').length > maxLen) kept.shift();
+  const value = kept.join(',');
+  return value.length > maxLen ? value.slice(0, maxLen) : value;
+}
+
+function syncExpCookie(assignments: Map<string, Variant>, experiments: ExperimentConfig[]): void {
+  if (!D) return;
+  const labels = experimentLabels(assignments, experiments);
   D.cookie = `_ab_exp=${encodeURIComponent(labels.join(','))};path=/;max-age=31536000;SameSite=Lax`;
+}
+
+function pushGaImpression(
+  e: ExperimentConfig,
+  v: Variant,
+  assignments: Map<string, Variant>,
+  experiments: ExperimentConfig[],
+): Record<string, unknown> | null {
+  if (!e.ga || !W) return null;
+  try {
+    ensureDataLayer();
+    const listed = capGaDimensionValue(experimentLabels(assignments, experiments));
+    const fallback = e.sequence_number && v.index != null ? `EXP-${e.sequence_number}-${v.index}` : v.name;
+    const gaLabel = listed || fallback;
+    const dlEvent: Record<string, unknown> = {
+      event: 'experience_impression',
+      measurement_id: e.ga.measurement_id,
+      [e.ga.dimension_name]: gaLabel,
+      experiment_id: e.id,
+      experiment_name: e.name,
+      variant_index: v.index ?? null,
+    };
+    W.dataLayer.push(dlEvent);
+    return dlEvent;
+  } catch {
+    return null;
+  }
 }
 
 interface SavedAssignment { variantId: string; css?: string; external_css?: string[]; external_js?: string[]; exposedAt?: number; redirect_url?: string; is_control?: boolean; }
@@ -1225,7 +1274,11 @@ export class GrowthRoadmaps {
     }
     if (ex) return v.name;
     if (e.ga && !this.#gf.has(e.id)) {
-      try { ensureDataLayer(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; const dlEvent: Record<string, unknown> = { event: 'experience_impression', measurement_id: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name, variant_index: v.index ?? null }; W!.dataLayer.push(dlEvent); this.#gf.add(e.id); this.#dbg('GA4 dataLayer.push (experience_impression):', name, dlEvent); } catch {}
+      const dlEvent = pushGaImpression(e, v, this.#a, this.#e);
+      if (dlEvent) {
+        this.#gf.add(e.id);
+        this.#dbg('GA4 dataLayer.push (experience_impression):', name, dlEvent);
+      }
     }
     if (this.#ht) this.#ht.setVariantId(v.id);
     if (this.#ft) this.#ft.setVariantId(v.id);
@@ -1403,7 +1456,11 @@ export class GrowthRoadmaps {
       }
       if (!ex) {
         if (e.ga && !this.#gf.has(e.id)) {
-          try { ensureDataLayer(); const gaLabel = e.sequence_number && v.index ? `EXP-${e.sequence_number}-${v.index}` : v.name; const dlEvent: Record<string, unknown> = { event: 'experience_impression', measurement_id: e.ga.measurement_id, [e.ga.dimension_name]: gaLabel, experiment_id: e.id, experiment_name: e.name, variant_index: v.index ?? null }; W!.dataLayer.push(dlEvent); this.#gf.add(e.id); this.#dbg('GA4 dataLayer.push (experience_impression):', e.name, dlEvent); } catch {}
+          const dlEvent = pushGaImpression(e, v, this.#a, this.#e);
+          if (dlEvent) {
+            this.#gf.add(e.id);
+            this.#dbg('GA4 dataLayer.push (experience_impression):', e.name, dlEvent);
+          }
         }
         addCss(v, e.id, this.#sm);
         if (this.#c.mutationObserver === false || !v.selectors?.length || selectorMatchesNow(v.selectors)) this.#runVariantJs(v);
